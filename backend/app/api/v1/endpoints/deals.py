@@ -23,15 +23,21 @@ async def scrape_deals(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Scrape deals by geographic area."""
+    """
+    Scrape deals by geographic area.
+    
+    Cost note: Google Places API costs ~$32 per 1000 requests.
+    Each query + pagination = multiple requests. Use max_deals to control costs.
+    """
+    max_deals = request.max_deals or 50
     job_id = str(uuid.uuid4())
     
     if request.area_type == "zip":
-        deals_data = await scraper_service.scrape_by_zip(request.value)
+        deals_data = await scraper_service.scrape_by_zip(request.value, max_deals=max_deals)
     elif request.area_type == "county":
         if not request.state:
             raise HTTPException(status_code=400, detail="State required for county search")
-        deals_data = await scraper_service.scrape_by_county(request.value, request.state)
+        deals_data = await scraper_service.scrape_by_county(request.value, request.state, max_deals=max_deals)
     else:
         raise HTTPException(status_code=400, detail="area_type must be 'zip' or 'county'")
     

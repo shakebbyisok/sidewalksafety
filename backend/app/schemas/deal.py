@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 from uuid import UUID
@@ -41,6 +41,12 @@ class GeographicSearchRequest(BaseModel):
     area_type: str  # "zip" or "county"
     value: str  # zip code or county name
     state: Optional[str] = None  # Required if county
+    max_deals: Optional[int] = Field(
+        default=50,
+        ge=1,
+        le=200,
+        description="Maximum number of deals to scrape (1-200, default: 50). Higher limits increase API costs."
+    )
 
 
 class GeographicSearchResponse(BaseModel):
