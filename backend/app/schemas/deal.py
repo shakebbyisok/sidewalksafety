@@ -22,6 +22,9 @@ class DealCreate(DealBase):
     longitude: Optional[float] = None
     places_id: Optional[str] = None
     apollo_id: Optional[str] = None
+    has_property_verified: Optional[bool] = False
+    property_verification_method: Optional[str] = None
+    property_type: Optional[str] = "parking_lot"
 
 
 class DealResponse(DealBase):
@@ -30,6 +33,9 @@ class DealResponse(DealBase):
     longitude: Optional[float] = None
     places_id: Optional[str] = None
     status: str
+    has_property_verified: bool
+    property_verification_method: Optional[str] = None
+    property_type: str
     created_at: datetime
     updated_at: Optional[datetime] = None
 

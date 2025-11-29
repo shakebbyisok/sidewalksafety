@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Numeric, DateTime, ForeignKey
+from sqlalchemy import Column, String, Numeric, DateTime, ForeignKey, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -27,6 +27,9 @@ class Deal(Base):
     places_id = Column(String, nullable=True)
     apollo_id = Column(String, nullable=True)
     status = Column(String, default="pending", nullable=False, index=True)
+    has_property_verified = Column(Boolean, default=False, nullable=False, index=True)
+    property_verification_method = Column(String, nullable=True)
+    property_type = Column(String, default="parking_lot", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

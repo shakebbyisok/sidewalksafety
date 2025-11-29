@@ -8,7 +8,8 @@
    - User selects ZIP code or county
    - Scrapes businesses from Apollo.io (primary) or Google Places (fallback)
    - Filters commercial properties with parking lots
-   - Stores as Deal records
+   - **Property Verification**: Verifies parking lot exists via Google Places Place Details API
+   - Only saves businesses with verified parking lots as Deal records
 
 2. **Automated Deal Evaluation**
    - Geocodes address → coordinates
@@ -19,7 +20,7 @@
    - Estimates revenue potential
 
 3. **Deal Management**
-   - View all scraped deals
+   - View all verified deals (only businesses with parking lots)
    - Filter by status
    - View evaluation results with satellite imagery
 
@@ -27,7 +28,8 @@
 
 - **Backend**: FastAPI + SQLAlchemy
 - **Database**: Supabase (PostgreSQL)
-- **Lead Scraping**: Apollo.io API + Google Places API
+- **Lead Scraping**: Apollo.io API + Google Places Text Search API
+- **Property Verification**: Google Places Place Details API
 - **AI Evaluation**: Roboflow API (YOLOv8), simple CV for parking lots
 - **Geocoding**: Google Maps Geocoding API
 - **Satellite Imagery**: Google Maps Static API
@@ -42,7 +44,9 @@
 - Business info (name, address, contact)
 - Location (lat/lng, places_id)
 - Status (pending/evaluating/evaluated)
+- Property verification (has_property_verified, property_verification_method, property_type)
 - Belongs to user
+- Only businesses with verified parking lots are saved
 
 **Evaluation**
 - Deal score (0-100)

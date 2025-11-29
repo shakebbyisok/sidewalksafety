@@ -1,6 +1,6 @@
 # Sidewalk Safety
 
-Lead scraping and deal evaluation platform for landscaping companies.
+Lead scraping and deal evaluation platform for landscaping companies. Automatically verifies businesses have parking lots before saving as deals.
 
 ## Quick Start
 
@@ -27,6 +27,7 @@ npm run dev
 
 - [API Reference](docs/API.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [Property Verification](docs/PROPERTY_VERIFICATION.md)
 
 ## Tech Stack
 

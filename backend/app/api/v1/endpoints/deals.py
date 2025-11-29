@@ -11,6 +11,7 @@ from app.schemas.deal import (
 )
 from app.core.scraper_service import scraper_service
 from app.core.geocoding_service import geocoding_service
+from app.core.property_verification_service import property_verification_service
 from app.core.dependencies import get_current_user
 import uuid
 
@@ -41,26 +42,47 @@ async def scrape_deals(
     else:
         raise HTTPException(status_code=400, detail="area_type must be 'zip' or 'county'")
     
-    # Geocode and save deals
+    # Geocode, verify, and save deals
     saved_count = 0
+    skipped_count = 0
+    
     for deal_data in deals_data:
+        # Geocode if needed
         if not deal_data.get("latitude") or not deal_data.get("longitude"):
             geocode_result = await geocoding_service.geocode_address(deal_data["address"])
             if geocode_result:
                 deal_data["latitude"] = float(geocode_result["latitude"])
                 deal_data["longitude"] = float(geocode_result["longitude"])
                 deal_data["places_id"] = geocode_result.get("place_id")
+            else:
+                skipped_count += 1
+                continue
         
-        db_deal = Deal(**deal_data, user_id=current_user.id)
-        db.add(db_deal)
-        saved_count += 1
+        # Verify parking lot exists
+        verification_result = await property_verification_service.verify_parking_lot_exists(
+            places_id=deal_data.get("places_id"),
+            latitude=float(deal_data["latitude"]),
+            longitude=float(deal_data["longitude"])
+        )
+        
+        # Only save if verified
+        if verification_result.has_parking_lot:
+            deal_data["has_property_verified"] = True
+            deal_data["property_verification_method"] = verification_result.verification_method
+            deal_data["property_type"] = "parking_lot"
+            
+            db_deal = Deal(**deal_data, user_id=current_user.id)
+            db.add(db_deal)
+            saved_count += 1
+        else:
+            skipped_count += 1
     
     db.commit()
     
     return GeographicSearchResponse(
         job_id=job_id,
         status="completed",
-        message=f"Scraped and saved {saved_count} deals"
+        message=f"Scraped {len(deals_data)} businesses. Verified {saved_count} with parking lots. Skipped {skipped_count} without parking lots."
     )
 
 
@@ -70,8 +92,11 @@ def list_deals(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """List all deals for current user."""
-    query = db.query(Deal).filter(Deal.user_id == current_user.id)
+    """List all deals for current user (only verified parking lots)."""
+    query = db.query(Deal).filter(
+        Deal.user_id == current_user.id,
+        Deal.has_property_verified == True
+    )
     if status:
         query = query.filter(Deal.status == status)
     return query.all()
@@ -87,8 +112,13 @@ def get_deals_for_map(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get deals optimized for map display with evaluation scores."""
-    query = db.query(Deal).filter(Deal.user_id == current_user.id)
+    """Get deals optimized for map display with evaluation scores (only verified parking lots)."""
+    query = db.query(Deal).filter(
+        Deal.user_id == current_user.id,
+        Deal.has_property_verified == True,
+        Deal.latitude.isnot(None),
+        Deal.longitude.isnot(None)
+    )
     
     # Filter by bounding box if provided
     if min_lat is not None and max_lat is not None and min_lng is not None and max_lng is not None:
@@ -102,9 +132,6 @@ def get_deals_for_map(
     # Filter by status
     if status:
         query = query.filter(Deal.status == status)
-    
-    # Only return deals with coordinates
-    query = query.filter(Deal.latitude.isnot(None), Deal.longitude.isnot(None))
     
     deals = query.all()
     

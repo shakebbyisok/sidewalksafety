@@ -50,7 +50,8 @@ Scrape deals by geographic area (requires auth).
 {
   "area_type": "zip" | "county",
   "value": "90210",
-  "state": "CA"  // Required if area_type is "county"
+  "state": "CA",  // Required if area_type is "county"
+  "max_deals": 50  // Optional, default: 50, max: 200
 }
 ```
 
@@ -59,18 +60,40 @@ Scrape deals by geographic area (requires auth).
 {
   "job_id": "uuid",
   "status": "completed",
-  "message": "Scraped and saved 25 deals"
+  "message": "Scraped 50 businesses. Verified 35 with parking lots. Skipped 15 without parking lots."
 }
 ```
+
+**Note:** Only businesses with verified parking lots are saved. The system automatically verifies each business using Google Places Place Details API before saving.
 
 ### `GET /api/v1/deals`
 List all deals for current user (requires auth).
 
+**Note:** Only returns deals with verified parking lots (`has_property_verified = true`).
+
 **Query Params:**
 - `status` (optional): Filter by status (pending/evaluating/evaluated)
 
+**Response:**
+```json
+[
+  {
+    "id": "uuid",
+    "business_name": "ABC Shopping Center",
+    "address": "123 Main St, Los Angeles, CA 90210",
+    "has_property_verified": true,
+    "property_verification_method": "place_details",
+    "property_type": "parking_lot",
+    "status": "pending",
+    ...
+  }
+]
+```
+
 ### `GET /api/v1/deals/map`
 Get deals optimized for map display (requires auth).
+
+**Note:** Only returns deals with verified parking lots (`has_property_verified = true`).
 
 **Query Params:**
 - `min_lat`, `max_lat`, `min_lng`, `max_lng` (optional): Bounding box
