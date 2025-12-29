@@ -276,7 +276,7 @@ class TileAnalyzerService:
                 asphalt_source=private_asphalt_result.source,
                 
                 raw_response={
-                    "cv_used": private_asphalt_result.cv_segmentation_used,
+                    "detection_method": private_asphalt_result.detection_method,
                     "osm_filter_used": private_asphalt_result.osm_road_filter_used,
                     "source": private_asphalt_result.source,
                     "total_asphalt_m2": private_asphalt_result.total_asphalt_area_m2,

@@ -146,6 +146,20 @@ def list_parking_lots(
         .all()
     )
     
+    # Fetch latest analysis for each lot in one query
+    lot_ids = [lot.id for lot in lots]
+    analyses_query = (
+        db.query(PropertyAnalysis)
+        .filter(PropertyAnalysis.parking_lot_id.in_(lot_ids))
+        .order_by(PropertyAnalysis.created_at.desc())
+        .all()
+    )
+    # Build lookup - latest analysis per lot
+    analysis_by_lot = {}
+    for analysis in analyses_query:
+        if analysis.parking_lot_id not in analysis_by_lot:
+            analysis_by_lot[analysis.parking_lot_id] = analysis
+    
     # Build response - no additional queries needed due to eager loading
     results = []
     for lot in lots:
@@ -166,6 +180,15 @@ def list_parking_lots(
             )
             lot_dict["match_score"] = float(assoc.match_score)
             lot_dict["distance_meters"] = float(assoc.distance_meters)
+        
+        # Add analysis data
+        analysis = analysis_by_lot.get(lot.id)
+        if analysis:
+            lot_dict["paved_area_sqft"] = float(analysis.private_asphalt_area_sqft or 0)
+            lot_dict["crack_count"] = int(analysis.total_crack_count or 0)
+            lot_dict["pothole_count"] = int(analysis.total_pothole_count or 0)
+            lot_dict["property_boundary_source"] = analysis.property_boundary_source
+            lot_dict["lead_quality"] = analysis.lead_quality
         
         results.append(ParkingLotWithBusiness(**lot_dict))
     
@@ -240,6 +263,21 @@ def get_parking_lots_for_map(
     
     # Build features - no additional queries due to eager loading
     features = []
+    
+    # Fetch latest analysis for each lot in one query
+    lot_ids = [lot.id for lot in lots]
+    analyses_query = (
+        db.query(PropertyAnalysis)
+        .filter(PropertyAnalysis.parking_lot_id.in_(lot_ids))
+        .order_by(PropertyAnalysis.created_at.desc())
+        .all()
+    )
+    # Build lookup - latest analysis per lot
+    analysis_by_lot = {}
+    for analysis in analyses_query:
+        if analysis.parking_lot_id not in analysis_by_lot:
+            analysis_by_lot[analysis.parking_lot_id] = analysis
+    
     for lot in lots:
         centroid = to_shape(lot.centroid)
         
@@ -247,6 +285,9 @@ def get_parking_lots_for_map(
         business, _ = get_primary_business_from_associations(lot.business_associations)
         business_name = business.name if business else None
         has_biz = business is not None
+        
+        # Get analysis data
+        analysis = analysis_by_lot.get(lot.id)
         
         features.append({
             "type": "Feature",
@@ -266,6 +307,12 @@ def get_parking_lots_for_map(
                 "is_evaluated": lot.is_evaluated,
                 "business_type_tier": lot.business_type_tier,
                 "discovery_mode": lot.discovery_mode,
+                # Analysis data
+                "paved_area_sqft": float(analysis.private_asphalt_area_sqft or 0) if analysis else None,
+                "crack_count": int(analysis.total_crack_count or 0) if analysis else None,
+                "pothole_count": int(analysis.total_pothole_count or 0) if analysis else None,
+                "property_boundary_source": analysis.property_boundary_source if analysis else None,
+                "lead_quality": analysis.lead_quality if analysis else None,
             }
         })
     
@@ -332,7 +379,12 @@ def get_parking_lot(
         logger.info(f"📸 PropertyAnalysis found for {parking_lot_id}")
         logger.info(f"   analysis_type: {property_analysis.analysis_type}")
         logger.info(f"   total_tiles: {property_analysis.total_tiles}")
-        logger.info(f"   total_asphalt_sqft: {property_analysis.total_asphalt_area_sqft}")
+        logger.info(f"   🔥 DB VALUES:")
+        logger.info(f"      total_asphalt_area_sqft: {property_analysis.total_asphalt_area_sqft}")
+        logger.info(f"      total_paved_area_sqft: {property_analysis.total_paved_area_sqft}")
+        logger.info(f"      private_asphalt_area_sqft: {property_analysis.private_asphalt_area_sqft}")
+        logger.info(f"      private_asphalt_geojson: {type(property_analysis.private_asphalt_geojson)} - {bool(property_analysis.private_asphalt_geojson)}")
+        logger.info(f"      surfaces_geojson: {type(property_analysis.surfaces_geojson)} - {bool(property_analysis.surfaces_geojson)}")
         logger.info(f"   condition_score: {property_analysis.weighted_condition_score}")
         
         # Build property boundary info if available

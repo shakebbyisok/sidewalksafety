@@ -78,16 +78,38 @@ export interface AnalysisTile {
   has_image?: boolean
 }
 
+export interface SurfaceInfo {
+  area_m2?: number
+  area_sqft?: number
+  geojson?: GeoJSONFeature | GeoJSONFeatureCollection | null
+  color?: string
+  label?: string
+}
+
+export interface SurfacesBreakdown {
+  asphalt?: SurfaceInfo
+  concrete?: SurfaceInfo
+  buildings?: SurfaceInfo
+}
+
 export interface PropertyAnalysisSummary {
   id: string
   status: string
   analysis_type?: string
+  detection_method?: string
+  
+  // NEW: Surface type breakdown from Grounded SAM
+  surfaces?: SurfacesBreakdown
+  surfaces_geojson?: GeoJSONFeatureCollection | null
+  total_paved_area_m2?: number
+  total_paved_area_sqft?: number
+  
   // Metrics
   total_asphalt_area_m2?: number
   total_asphalt_area_sqft?: number
   private_asphalt_area_m2?: number
   private_asphalt_area_sqft?: number
-  private_asphalt_geojson?: GeoJSONFeature | GeoJSONFeatureCollection
+  private_asphalt_geojson?: GeoJSONFeature | GeoJSONFeatureCollection | null
   public_road_area_m2?: number
   parking_area_sqft?: number
   road_area_sqft?: number

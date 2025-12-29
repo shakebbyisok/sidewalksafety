@@ -17,7 +17,7 @@ Design Principles:
 
 import logging
 import uuid
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 from datetime import datetime
 from shapely.geometry import Point, Polygon
 
@@ -131,6 +131,10 @@ class TilePipeline:
                     zoom=19  # High resolution
                 )
                 logger.info(f"      Estimated radius: {radius_m}m based on property type")
+                
+                # Create an estimated boundary from the tile grid
+                property_boundary = self._create_estimated_boundary(lat, lng, radius_m)
+                logger.info(f"      📐 Created estimated boundary: {radius_m*2}m x {radius_m*2}m")
             
             logger.info(f"      📊 Grid: {tile_grid.rows}x{tile_grid.cols} = {tile_grid.total_tiles} tiles")
             logger.info(f"      🔍 Zoom: {tile_grid.zoom}")
@@ -289,6 +293,13 @@ class TilePipeline:
             private_asphalt_area_m2=aggregated.asphalt.private_asphalt_area_m2,
             private_asphalt_area_sqft=aggregated.asphalt.private_asphalt_area_sqft,
             
+            # Total paved area (asphalt + concrete)
+            total_paved_area_m2=aggregated.asphalt.private_asphalt_area_m2,  # Same for now
+            total_paved_area_sqft=aggregated.asphalt.private_asphalt_area_sqft,
+            
+            # Merged GeoJSON from all tiles
+            private_asphalt_geojson=self._merge_tile_geojsons(analysis_result),
+            
             # Public roads filtered out
             public_road_area_m2=aggregated.asphalt.public_road_area_m2,
             
@@ -410,6 +421,63 @@ class TilePipeline:
         db.refresh(property_analysis)
         
         return property_analysis
+    
+    def _create_estimated_boundary(self, lat: float, lng: float, radius_m: float) -> Polygon:
+        """
+        Create an estimated rectangular boundary polygon around a point.
+        
+        Used when Regrid doesn't return a parcel boundary.
+        """
+        import math
+        
+        # Convert radius to degrees (approximate)
+        lat_offset = radius_m / 111000  # 1 degree lat ≈ 111km
+        lng_offset = radius_m / (111000 * math.cos(math.radians(lat)))
+        
+        # Create a rectangular boundary
+        min_lat = lat - lat_offset
+        max_lat = lat + lat_offset
+        min_lng = lng - lng_offset
+        max_lng = lng + lng_offset
+        
+        return Polygon([
+            (min_lng, min_lat),
+            (max_lng, min_lat),
+            (max_lng, max_lat),
+            (min_lng, max_lat),
+            (min_lng, min_lat),
+        ])
+    
+    def _merge_tile_geojsons(self, analysis_result) -> Optional[Dict]:
+        """
+        Merge all tile GeoJSONs into a single FeatureCollection.
+        """
+        features = []
+        
+        for tile_result in analysis_result.tile_results:
+            if tile_result.segmentation and tile_result.segmentation.private_asphalt_geojson:
+                geojson = tile_result.segmentation.private_asphalt_geojson
+                
+                # Handle both single features and FeatureCollections
+                if geojson.get("type") == "FeatureCollection":
+                    features.extend(geojson.get("features", []))
+                elif geojson.get("type") == "Feature":
+                    features.append(geojson)
+                else:
+                    # Assume it's just a geometry
+                    features.append({
+                        "type": "Feature",
+                        "geometry": geojson,
+                        "properties": {"surface_type": "paved"}
+                    })
+        
+        if not features:
+            return None
+        
+        return {
+            "type": "FeatureCollection",
+            "features": features
+        }
 
 
 # Singleton instance

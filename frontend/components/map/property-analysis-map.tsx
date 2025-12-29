@@ -56,7 +56,7 @@ interface SurfaceLayerConfig {
 }
 
 const SURFACE_LAYERS: SurfaceLayerConfig[] = [
-  { key: 'asphalt', label: 'Asphalt', color: '#374151', fillOpacity: 0.5, strokeOpacity: 0.9 },
+  { key: 'asphalt', label: 'Paved', color: '#374151', fillOpacity: 0.5, strokeOpacity: 0.9 },
   { key: 'concrete', label: 'Concrete', color: '#9CA3AF', fillOpacity: 0.5, strokeOpacity: 0.9 },
   { key: 'buildings', label: 'Buildings', color: '#DC2626', fillOpacity: 0.1, strokeOpacity: 0.8 },
 ]
@@ -294,7 +294,7 @@ export function PropertyAnalysisMap({
           'asphalt',
           surfaces.asphalt.color || '#374151',
           surfaces.asphalt.area_sqft,
-          'Asphalt'
+          'Paved Surface'
         )
         overlaysRef.current.asphalt = polygons
       }
@@ -681,7 +681,7 @@ export function PropertyAnalysisMap({
               <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Surfaces</span>
             </div>
             <LayerToggle
-              label="Asphalt"
+              label="Paved"
               color="#374151"
               active={activeLayer.asphalt}
               onClick={() => toggleLayer('asphalt')}
@@ -732,7 +732,7 @@ export function PropertyAnalysisMap({
             <div className="h-4 border-l border-muted" />
             <div className="flex items-center gap-1.5">
               <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#374151' }} />
-              <span>Asphalt</span>
+              <span>Paved</span>
             </div>
             <div className="flex items-center gap-1.5">
               <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#9CA3AF' }} />

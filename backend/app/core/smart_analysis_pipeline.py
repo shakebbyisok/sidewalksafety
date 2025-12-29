@@ -841,12 +841,22 @@ class SmartAnalysisPipeline:
                 existing.property_land_use = regrid_parcel.land_use
                 existing.property_zoning = regrid_parcel.zoning
             
-            # Surface metrics
+            # DEBUG: Log what we're updating
+            logger.info(f"   📝 UPDATING VALUES:")
+            logger.info(f"      result.total_paved_area_m2 = {result.total_paved_area_m2}")
+            logger.info(f"      result.total_paved_area_sqft = {result.total_paved_area_sqft}")
+            logger.info(f"      result.asphalt_area_m2 = {result.asphalt_area_m2}")
+            logger.info(f"      result.asphalt_area_sqft = {result.asphalt_area_sqft}")
+            
+            # Surface metrics - save to all relevant columns
             existing.total_asphalt_area_m2 = result.total_paved_area_m2
             existing.total_asphalt_area_sqft = result.total_paved_area_sqft
+            existing.total_paved_area_m2 = result.total_paved_area_m2  # Also save here
+            existing.total_paved_area_sqft = result.total_paved_area_sqft  # Also save here
             existing.private_asphalt_area_m2 = result.asphalt_area_m2
             existing.private_asphalt_area_sqft = result.asphalt_area_sqft
             existing.private_asphalt_geojson = result.surfaces_geojson  # All surfaces
+            existing.surfaces_geojson = result.surfaces_geojson  # Also save here
             existing.public_road_area_m2 = result.public_road_area_m2
             
             # Store concrete data if column exists
@@ -875,6 +885,14 @@ class SmartAnalysisPipeline:
             logger.info(f"   ✅ Updated existing PropertyAnalysis: {existing.id}")
             return
         
+        # DEBUG: Log what we're about to save
+        logger.info(f"   📝 SAVING VALUES:")
+        logger.info(f"      result.total_paved_area_m2 = {result.total_paved_area_m2}")
+        logger.info(f"      result.total_paved_area_sqft = {result.total_paved_area_sqft}")
+        logger.info(f"      result.asphalt_area_m2 = {result.asphalt_area_m2}")
+        logger.info(f"      result.asphalt_area_sqft = {result.asphalt_area_sqft}")
+        logger.info(f"      result.surfaces_geojson = {type(result.surfaces_geojson)} with {len(result.surfaces_geojson.get('features', [])) if result.surfaces_geojson else 0} features")
+        
         # Create new PropertyAnalysis record
         property_analysis = PropertyAnalysis(
             id=analysis_id,
@@ -895,12 +913,15 @@ class SmartAnalysisPipeline:
             # Analysis type
             analysis_type="smart",
             
-            # Surface metrics
+            # Surface metrics - ALSO save to total_paved columns
             total_asphalt_area_m2=result.total_paved_area_m2,
             total_asphalt_area_sqft=result.total_paved_area_sqft,
+            total_paved_area_m2=result.total_paved_area_m2,  # NEW: Save to correct column
+            total_paved_area_sqft=result.total_paved_area_sqft,  # NEW: Save to correct column
             private_asphalt_area_m2=result.asphalt_area_m2,
             private_asphalt_area_sqft=result.asphalt_area_sqft,
             private_asphalt_geojson=result.surfaces_geojson,  # All surfaces GeoJSON
+            surfaces_geojson=result.surfaces_geojson,  # NEW: Also save to dedicated column
             public_road_area_m2=result.public_road_area_m2,
             
             # Condition metrics

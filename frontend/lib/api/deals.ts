@@ -59,6 +59,12 @@ export const dealsApi = {
       // Business-first discovery fields
       business_type_tier: lot.business_type_tier,
       discovery_mode: lot.discovery_mode,
+      // Analysis data
+      paved_area_sqft: lot.paved_area_sqft,
+      crack_count: lot.crack_count,
+      pothole_count: lot.pothole_count,
+      property_boundary_source: lot.property_boundary_source,
+      lead_quality: lot.lead_quality,
     }))
   },
 
@@ -110,6 +116,12 @@ export const dealsApi = {
       satellite_url: feature.properties.satellite_image_url,
       business_type_tier: feature.properties.business_type_tier,
       has_business: feature.properties.has_business,
+      // Analysis data
+      paved_area_sqft: feature.properties.paved_area_sqft,
+      crack_count: feature.properties.crack_count,
+      pothole_count: feature.properties.pothole_count,
+      property_boundary_source: feature.properties.property_boundary_source,
+      lead_quality: feature.properties.lead_quality,
     }))
   },
 }

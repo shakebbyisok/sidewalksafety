@@ -48,6 +48,12 @@ export interface Deal {
   has_business: boolean
   match_score?: number
   distance_meters?: number
+  // Analysis data
+  paved_area_sqft?: number
+  crack_count?: number
+  pothole_count?: number
+  property_boundary_source?: 'regrid' | 'estimated'
+  lead_quality?: 'HIGH' | 'MEDIUM' | 'LOW'
   // Business-first discovery fields
   business_type_tier?: 'premium' | 'high' | 'standard'
   discovery_mode?: 'business_first' | 'parking_first'
@@ -73,6 +79,12 @@ export interface DealMapResponse {
   business_type_tier?: 'premium' | 'high' | 'standard'
   business?: BusinessInfo
   has_business?: boolean
+  // Analysis data
+  paved_area_sqft?: number
+  crack_count?: number
+  pothole_count?: number
+  property_boundary_source?: 'regrid' | 'estimated'
+  lead_quality?: 'HIGH' | 'MEDIUM' | 'LOW'
 }
 
 export type DamageSeverity = 'low' | 'medium' | 'high' | 'critical'

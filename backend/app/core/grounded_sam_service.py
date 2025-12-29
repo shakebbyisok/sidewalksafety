@@ -130,8 +130,8 @@ class GroundedSAMService:
         """
         Detect surfaces in a satellite image.
         
-        Primary: Replicate's Grounded SAM (high accuracy, paid)
-        Fallback: Roboflow segmentation model (free)
+        SIMPLIFIED: Uses Roboflow's free satellite-building-segmentation model.
+        The "road" class includes all paved surfaces (parking lots, driveways).
         
         Args:
             image_bytes: Satellite image as bytes
@@ -144,8 +144,16 @@ class GroundedSAMService:
         Returns:
             SurfaceDetectionResult with all detected surfaces
         """
+        # SIMPLIFIED: Always use Roboflow since it's free and works
+        # Skip Replicate (paid API with billing issues)
+        logger.info("   🔄 Using Roboflow satellite-building-segmentation model...")
+        return await self._detect_with_roboflow_fallback(
+            image_bytes, image_bounds, property_boundary
+        )
+        
+        # DISABLED: Replicate Grounded SAM (uncomment if billing is resolved)
         # Try Replicate first if configured and not known to be failing
-        if self.is_configured and not self._replicate_failed:
+        if False and self.is_configured and not self._replicate_failed:
             result = await self._detect_with_replicate(
                 image_bytes, image_bounds, property_boundary,
                 detect_asphalt, detect_concrete, detect_buildings
@@ -746,7 +754,10 @@ class GroundedSAMService:
                     )
                     result.building_surfaces.append(surface)
             
-            # Process paved surfaces (roads) - treat as "asphalt" since we can't differentiate
+            # Process paved surfaces (roads) - includes parking lots, driveways, all paved areas
+            # Roboflow detects "road" class which covers all paved surfaces
+            logger.info(f"      Processing {len(segmentation.paved_surfaces)} paved surfaces from Roboflow...")
+            
             for paved in segmentation.paved_surfaces:
                 if paved.polygon and not paved.polygon.is_empty:
                     # Clip to property boundary
@@ -764,10 +775,10 @@ class GroundedSAMService:
                     if area_m2 < self.MIN_AREA_M2:
                         continue
                     
-                    # Roboflow model can't differentiate asphalt vs concrete,
-                    # so we'll label everything as "asphalt" (the more common surface)
+                    # Store as "asphalt" type (Roboflow's "road" class = paved surfaces)
+                    # This includes parking lots, driveways, and any paved areas
                     surface = DetectedSurface(
-                        surface_type="asphalt",
+                        surface_type="asphalt",  # Generic paved surface
                         polygon=poly,
                         confidence=paved.confidence,
                         area_m2=area_m2,
@@ -777,15 +788,16 @@ class GroundedSAMService:
                             "type": "Feature",
                             "geometry": mapping(poly),
                             "properties": {
-                                "surface_type": "asphalt",
+                                "surface_type": "paved",  # UI will show "Paved Surface"
                                 "confidence": paved.confidence,
                                 "area_sqft": area_m2 * 10.764,
                                 "color": self.SURFACE_COLORS["asphalt"],
-                                "note": "Detected via Roboflow (may include concrete)"
+                                "label": "Paved Surface",
                             }
                         }
                     )
                     result.asphalt_surfaces.append(surface)
+                    logger.info(f"         ✅ Added paved surface: {area_m2:.0f}m² ({area_m2 * 10.764:.0f} sqft)")
             
             # Aggregate results
             result = self._aggregate_results(result, image_bounds)

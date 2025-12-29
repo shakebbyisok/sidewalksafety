@@ -187,6 +187,12 @@ class ParkingLotWithBusiness(ParkingLotResponse):
     business: Optional[BusinessSummary] = None
     match_score: Optional[float] = None
     distance_meters: Optional[float] = None
+    # Analysis data
+    paved_area_sqft: Optional[float] = None
+    crack_count: Optional[int] = None
+    pothole_count: Optional[int] = None
+    property_boundary_source: Optional[str] = None
+    lead_quality: Optional[str] = None
 
     class Config:
         from_attributes = True

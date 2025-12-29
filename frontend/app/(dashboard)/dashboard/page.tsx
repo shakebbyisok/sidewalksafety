@@ -19,7 +19,11 @@ import {
   Target,
   Layers,
   AlertTriangle,
-  Circle
+  Circle,
+  Square,
+  Zap,
+  ShieldCheck,
+  ShieldAlert
 } from 'lucide-react'
 
 type ScoreFilter = 'all' | 'lead' | 'critical' | 'poor' | 'fair' | 'good'
@@ -286,16 +290,6 @@ export default function DashboardPage() {
               )}
             </div>
 
-            {/* Stats Footer */}
-            {allDeals.length > 0 && (
-              <div className="flex-shrink-0 p-3 border-t border-border bg-muted/20">
-                <div className="grid grid-cols-3 gap-3 text-center">
-                  <StatItem label="Analyzed" value={counts.analyzed} color="text-muted-foreground" />
-                  <StatItem label="Leads" value={counts.leads} color="text-emerald-600 dark:text-emerald-400" />
-                  <StatItem label="Pending" value={counts.pending} color="text-amber-500" />
-                </div>
-              </div>
-            )}
           </>
         )}
       </div>
@@ -378,6 +372,19 @@ function ParkingLotItem({
   const isLead = deal.score !== null && deal.score !== undefined && deal.score < 50
   const score = deal.score
   const scoreStyle = getScoreColor(score)
+  
+  // Analysis data
+  const pavedArea = deal.paved_area_sqft
+  const crackCount = deal.crack_count
+  const potholeCount = deal.pothole_count
+  const boundarySource = deal.property_boundary_source
+  const leadQuality = deal.lead_quality
+
+  // Format number with commas
+  const formatNumber = (n: number | null | undefined) => {
+    if (n === null || n === undefined) return '—'
+    return n.toLocaleString()
+  }
 
   return (
     <div
@@ -413,10 +420,56 @@ function ParkingLotItem({
           </div>
 
           {/* Address */}
-          <p className="text-xs text-muted-foreground truncate mb-2">{deal.address}</p>
+          <p className="text-xs text-muted-foreground truncate mb-1.5">{deal.address}</p>
+
+          {/* Metrics Row - NEW */}
+          {(pavedArea || crackCount !== undefined || potholeCount !== undefined) && (
+            <div className="flex items-center gap-3 mb-1.5 text-[10px]">
+              {pavedArea !== null && pavedArea !== undefined && (
+                <div className="flex items-center gap-1">
+                  <Square className="h-3 w-3 text-emerald-500" />
+                  <span className="text-muted-foreground">
+                    <span className="font-medium text-foreground">{formatNumber(Math.round(pavedArea))}</span> sqft
+                  </span>
+                </div>
+              )}
+              {crackCount !== null && crackCount !== undefined && crackCount > 0 && (
+                <div className="flex items-center gap-1">
+                  <Zap className="h-3 w-3 text-amber-500" />
+                  <span className="text-muted-foreground">
+                    <span className="font-medium text-foreground">{crackCount}</span> cracks
+                  </span>
+                </div>
+              )}
+              {potholeCount !== null && potholeCount !== undefined && potholeCount > 0 && (
+                <div className="flex items-center gap-1">
+                  <Circle className="h-3 w-3 text-red-500" />
+                  <span className="text-muted-foreground">
+                    <span className="font-medium text-foreground">{potholeCount}</span> potholes
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Tags */}
           <div className="flex items-center gap-1 flex-wrap">
+            {/* Lead Quality - NEW */}
+            {leadQuality === 'HIGH' && (
+              <StatusChip status="success" icon={Target}>High Lead</StatusChip>
+            )}
+            {leadQuality === 'MEDIUM' && (
+              <StatusChip status="info" icon={Target}>Med Lead</StatusChip>
+            )}
+
+            {/* Regrid verification - NEW */}
+            {boundarySource === 'regrid' && (
+              <StatusChip status="success" icon={ShieldCheck}>Regrid</StatusChip>
+            )}
+            {boundarySource === 'estimated' && (
+              <StatusChip status="warning" icon={ShieldAlert}>Est.</StatusChip>
+            )}
+
             {/* Status */}
             <StatusChip 
               status={deal.status === 'evaluated' ? 'success' : deal.status === 'evaluating' ? 'info' : 'warning'}
@@ -425,29 +478,15 @@ function ParkingLotItem({
               {deal.status}
             </StatusChip>
 
-            {/* Lead indicator */}
-            {isLead && (
-              <StatusChip status="success" icon={Target}>Lead</StatusChip>
-            )}
-
             {/* Business indicator */}
             {hasBusiness ? (
               <StatusChip status="info" icon={Building2}>Business</StatusChip>
             ) : (
-              <StatusChip status="warning" icon={AlertTriangle}>No business</StatusChip>
+              <StatusChip status="warning" icon={AlertTriangle}>No biz</StatusChip>
             )}
           </div>
         </div>
       </div>
-    </div>
-  )
-}
-
-function StatItem({ label, value, color }: { label: string; value: number; color: string }) {
-  return (
-    <div>
-      <p className={cn('text-lg font-semibold tabular-nums', color)}>{value}</p>
-      <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{label}</p>
     </div>
   )
 }

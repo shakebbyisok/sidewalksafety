@@ -268,15 +268,15 @@ export default function ParkingLotDetailPage() {
               
               {/* Surface Type Breakdown */}
               <div className="space-y-2">
-                {/* Asphalt */}
+                {/* Paved Surfaces (detected via Roboflow) */}
                 <SurfaceRow
                   color="#374151"
-                  label="Asphalt"
+                  label="Paved Surfaces"
                   area={surfaces?.asphalt?.area_sqft || analysis?.private_asphalt_area_sqft || 0}
                   isMain
                 />
                 
-                {/* Concrete (if detected) */}
+                {/* Concrete (if separately detected) */}
                 {(surfaces?.concrete?.area_sqft ?? 0) > 0 && (
                   <SurfaceRow
                     color="#9CA3AF"

@@ -406,38 +406,62 @@ class DiscoveryOrchestrator:
                     db.add(db_business)
                     db.flush()
                 
-                # Save parking lot to database
-                db_lot = ParkingLot(
-                    user_id=user_id,
-                    geometry=from_shape(found_lot.geometry, srid=4326) if found_lot.geometry else None,
-                    centroid=from_shape(found_lot.centroid, srid=4326),
-                    area_m2=found_lot.area_m2,
-                    area_sqft=found_lot.area_sqft,
-                    osm_id=found_lot.source_id if found_lot.source == "osm" else None,
-                    data_sources=[found_lot.source],
-                    operator_name=business.name,
-                    address=business.address,
-                    surface_type=found_lot.surface_type,
-                    raw_metadata=found_lot.raw_data,
-                    business_type_tier=business.tier.value,
-                    discovery_mode="business_first",
-                )
-                db.add(db_lot)
-                db.flush()
+                # Check if parking lot already exists for this business
+                existing_lot = None
+                if existing_business:
+                    # Check for existing parking lot via association
+                    existing_assoc = db.query(ParkingLotBusinessAssociation).filter(
+                        ParkingLotBusinessAssociation.business_id == db_business.id,
+                        ParkingLotBusinessAssociation.is_primary == True
+                    ).first()
+                    if existing_assoc:
+                        existing_lot = db.query(ParkingLot).filter(
+                            ParkingLot.id == existing_assoc.parking_lot_id
+                        ).first()
                 
-                parking_lot_ids.append(db_lot.id)
-                
-                # Create association
-                association = ParkingLotBusinessAssociation(
-                    parking_lot_id=db_lot.id,
-                    business_id=db_business.id,
-                    match_score=95.0,  # High score since we found business first
-                    distance_meters=0,  # Parking lot is for this business
-                    association_method="business_first",
-                    is_primary=True,
-                )
-                db.add(association)
-                db.flush()
+                if existing_lot:
+                    # Use existing parking lot, skip re-analysis
+                    db_lot = existing_lot
+                    logger.info(f"      ♻️  Using existing parking lot (already analyzed)")
+                    parking_lot_ids.append(db_lot.id)
+                    
+                    # Skip to next business if already evaluated
+                    if db_lot.is_evaluated:
+                        logger.info(f"      ✅ Already evaluated, skipping")
+                        continue
+                else:
+                    # Create new parking lot
+                    db_lot = ParkingLot(
+                        user_id=user_id,
+                        geometry=from_shape(found_lot.geometry, srid=4326) if found_lot.geometry else None,
+                        centroid=from_shape(found_lot.centroid, srid=4326),
+                        area_m2=found_lot.area_m2,
+                        area_sqft=found_lot.area_sqft,
+                        osm_id=found_lot.source_id if found_lot.source == "osm" else None,
+                        data_sources=[found_lot.source],
+                        operator_name=business.name,
+                        address=business.address,
+                        surface_type=found_lot.surface_type,
+                        raw_metadata=found_lot.raw_data,
+                        business_type_tier=business.tier.value,
+                        discovery_mode="business_first",
+                    )
+                    db.add(db_lot)
+                    db.flush()
+                    
+                    parking_lot_ids.append(db_lot.id)
+                    
+                    # Create association
+                    association = ParkingLotBusinessAssociation(
+                        parking_lot_id=db_lot.id,
+                        business_id=db_business.id,
+                        match_score=95.0,  # High score since we found business first
+                        distance_meters=0,  # Parking lot is for this business
+                        association_method="business_first",
+                        is_primary=True,
+                    )
+                    db.add(association)
+                    db.flush()
                 
                 processed_count += 1
                 
@@ -449,11 +473,11 @@ class DiscoveryOrchestrator:
                 regrid_parcel = None
                 
                 try:
-                    # Use address search with coordinates as fallback
-                    regrid_parcel = await regrid_service.get_parcel_by_address(
-                        address=business.address,
-                        fallback_lat=business.latitude,
-                        fallback_lng=business.longitude
+                    # Use validated parcel lookup (point-in-polygon validation)
+                    regrid_parcel = await regrid_service.get_validated_parcel(
+                        lat=business.latitude,
+                        lng=business.longitude,
+                        address=business.address
                     )
                     
                     if regrid_parcel and regrid_parcel.has_valid_geometry:
@@ -463,50 +487,40 @@ class DiscoveryOrchestrator:
                         logger.info(f"         Regrid Address: {regrid_parcel.address}")
                         logger.info(f"         Business Address: {business.address[:50]}...")
                     else:
-                        logger.warning(f"      ⚠️ No Regrid parcel found - will estimate boundary")
+                        logger.warning(f"      ❌ No Regrid parcel found - SKIPPING (need exact boundary)")
                 except Exception as e:
-                    logger.warning(f"      ⚠️ Regrid lookup failed: {e} - will estimate boundary")
+                    logger.warning(f"      ❌ Regrid lookup failed: {e} - SKIPPING")
                 
-                # ============ Step 2: Run Smart Two-Phase Analysis Pipeline ============
-                logger.info(f"      🎯 Running smart analysis pipeline (Phase 1: Detect Asphalt, Phase 2: Detect Damage)...")
+                # ============ Step 2: REQUIRE Regrid Boundary ============
+                # Without exact property boundary, we can't accurately detect private asphalt
+                if not property_boundary:
+                    logger.warning(f"      ⏭️  Skipping {business.name} - no Regrid coverage in this area")
+                    # Mark as skipped but keep in DB for potential future analysis
+                    db_lot.evaluation_status = "skipped_no_boundary"
+                    db_lot.evaluation_error = "Regrid has no parcel data for this location"
+                    db.commit()
+                    continue
                 
-                # Use smart pipeline if we have a property boundary
-                if property_boundary:
-                    smart_result = await smart_analysis_pipeline.analyze_property(
-                        db=db,
-                        property_boundary=property_boundary,
-                        regrid_parcel=regrid_parcel,
-                        lat=business.latitude,
-                        lng=business.longitude,
-                        user_id=user_id,
-                        business_id=db_business.id,
-                        parking_lot_id=db_lot.id,
-                        business_name=business.name,
-                        address=business.address,
-                    )
-                    
-                    # Convert smart result to property_analysis format for compatibility
-                    property_analysis = db.query(PropertyAnalysis).filter(
-                        PropertyAnalysis.parking_lot_id == db_lot.id
-                    ).first()
-                else:
-                    # Fallback to old tile pipeline if no boundary
-                    logger.warning(f"      ⚠️ No property boundary - falling back to tile pipeline")
-                    property_analysis = await tile_pipeline.analyze_property(
-                        db=db,
-                        lat=business.latitude,
-                        lng=business.longitude,
-                        user_id=user_id,
-                        business_id=db_business.id,
-                        parking_lot_id=db_lot.id,
-                        business_name=business.name,
-                        address=business.address,
-                        property_type=business.business_type,
-                        property_boundary=property_boundary,
-                        regrid_parcel=regrid_parcel,
-                        min_zoom=18,
-                        max_zoom=20
-                    )
+                # ============ Step 3: Run Smart Analysis Pipeline ============
+                logger.info(f"      🎯 Running smart analysis pipeline...")
+                
+                smart_result = await smart_analysis_pipeline.analyze_property(
+                    db=db,
+                    property_boundary=property_boundary,
+                    regrid_parcel=regrid_parcel,
+                    lat=business.latitude,
+                    lng=business.longitude,
+                    user_id=user_id,
+                    business_id=db_business.id,
+                    parking_lot_id=db_lot.id,
+                    business_name=business.name,
+                    address=business.address,
+                )
+                
+                # Get property_analysis for compatibility
+                property_analysis = db.query(PropertyAnalysis).filter(
+                    PropertyAnalysis.parking_lot_id == db_lot.id
+                ).first()
                 
                 if property_analysis and property_analysis.status == "completed":
                     # Update parking lot with aggregated results
