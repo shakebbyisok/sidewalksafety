@@ -94,3 +94,14 @@ else:
         StaticFiles(directory=cv_images_path),
         name="cv_images"
     )
+
+
+# Allow running directly: python -m app.main
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=settings.PORT,
+        reload=settings.ENVIRONMENT == "development",
+    )

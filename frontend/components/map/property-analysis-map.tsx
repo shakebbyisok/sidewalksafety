@@ -168,7 +168,7 @@ export function PropertyAnalysisMap({
         return
       }
 
-      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY
+      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
       if (!apiKey) {
         reject(new Error('Google Maps API key not configured'))
         return

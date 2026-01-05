@@ -9,6 +9,10 @@ Detects:
 - Concrete (light pavement - sidewalks, some parking areas)  
 - Buildings (to exclude from analysis)
 
+IMPORTANT: Before running CV, we MASK the satellite image to the property
+boundary polygon. This ensures CV only detects surfaces WITHIN the property,
+not from neighboring properties or public roads outside the boundary.
+
 When Replicate credits are unavailable, automatically falls back to
 the free Roboflow model which detects "road" (paved surfaces) and "building".
 """
@@ -27,6 +31,7 @@ from PIL import Image
 import math
 
 from app.core.config import settings
+from app.core.polygon_masking_service import polygon_masking_service, MaskedImageResult
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +61,14 @@ class SurfaceDetectionResult:
     concrete_polygon: Optional[Polygon] = None
     building_polygon: Optional[Polygon] = None
     
+    # Merged GeoJSON for each type (for API/frontend)
+    asphalt_geojson: Optional[Dict] = None
+    concrete_geojson: Optional[Dict] = None
+    building_geojson: Optional[Dict] = None
+    
+    # Combined surfaces list (for backward compat)
+    surfaces: List[Dict] = field(default_factory=list)
+    
     # Total areas
     total_asphalt_area_m2: float = 0
     total_asphalt_area_sqft: float = 0
@@ -63,6 +76,8 @@ class SurfaceDetectionResult:
     total_concrete_area_sqft: float = 0
     total_paved_area_m2: float = 0  # asphalt + concrete
     total_paved_area_sqft: float = 0
+    building_area_m2: float = 0
+    public_road_area_m2: float = 0
     
     # Metadata
     detection_method: str = "grounded_sam_replicate"
@@ -91,9 +106,21 @@ class GroundedSAMService:
     GROUNDED_SAM_MODEL = "schananas/grounded_sam:ee871c19efb1941f55f66a3d7d960428c8a5afcb77449547fe8e5a3ab9ebc21c"
     
     # Detection prompts for each surface type
+    # Using period (.) as separator - Grounding DINO convention for multiple classes
     SURFACE_PROMPTS = {
-        "asphalt": "dark asphalt parking lot . asphalt driveway . black pavement . dark paved surface",
-        "concrete": "light gray concrete . white concrete parking lot . cement surface . light pavement",
+        # Combined paved surfaces prompt - single API call for all pavement
+        "paved": (
+            "parking lot . "
+            "asphalt pavement . "
+            "paved driveway . "
+            "concrete pavement . "
+            "paved road . "
+            "blacktop . "
+            "tarmac surface"
+        ),
+        # Separate prompts if needed for differentiation
+        "asphalt": "dark asphalt parking lot . black pavement . dark paved driveway . blacktop",
+        "concrete": "light gray concrete . white concrete sidewalk . cement pavement . light paved surface",
         "building": "building rooftop . building roof . structure roof",
     }
     
@@ -130,13 +157,17 @@ class GroundedSAMService:
         """
         Detect surfaces in a satellite image.
         
-        SIMPLIFIED: Uses Roboflow's free satellite-building-segmentation model.
-        The "road" class includes all paved surfaces (parking lots, driveways).
+        APPROACH:
+        1. MASK the image to property boundary (if provided)
+        2. Run CV on the masked image - model only sees property area
+        3. Map detections back to geo-coordinates
+        
+        This ensures we don't detect neighbor's parking lots or public roads.
         
         Args:
             image_bytes: Satellite image as bytes
             image_bounds: Geographic bounds {min_lat, max_lat, min_lng, max_lng}
-            property_boundary: Optional property boundary to clip results
+            property_boundary: Property boundary to mask to (REQUIRED for accuracy)
             detect_asphalt: Whether to detect asphalt surfaces
             detect_concrete: Whether to detect concrete surfaces
             detect_buildings: Whether to detect buildings
@@ -144,33 +175,78 @@ class GroundedSAMService:
         Returns:
             SurfaceDetectionResult with all detected surfaces
         """
-        # SIMPLIFIED: Always use Roboflow since it's free and works
-        # Skip Replicate (paid API with billing issues)
-        logger.info("   🔄 Using Roboflow satellite-building-segmentation model...")
-        return await self._detect_with_roboflow_fallback(
-            image_bytes, image_bounds, property_boundary
-        )
+        # ============ STEP 1: Apply polygon mask if boundary provided ============
+        masked_result: Optional[MaskedImageResult] = None
+        effective_image_bytes = image_bytes
+        effective_bounds = image_bounds
         
-        # DISABLED: Replicate Grounded SAM (uncomment if billing is resolved)
-        # Try Replicate first if configured and not known to be failing
-        if False and self.is_configured and not self._replicate_failed:
-            result = await self._detect_with_replicate(
-                image_bytes, image_bounds, property_boundary,
-                detect_asphalt, detect_concrete, detect_buildings
+        if property_boundary is not None and not property_boundary.is_empty:
+            logger.info("   🎭 Applying polygon mask to focus on property...")
+            
+            masked_result = polygon_masking_service.mask_to_polygon(
+                image_bytes=image_bytes,
+                polygon=property_boundary,
+                image_bounds=image_bounds,
             )
             
-            if result.success:
+            if masked_result.success:
+                effective_image_bytes = masked_result.image_bytes
+                # Update bounds if image was cropped
+                if masked_result.was_cropped:
+                    effective_bounds = {
+                        "min_lat": masked_result.geo_bounds.min_lat,
+                        "max_lat": masked_result.geo_bounds.max_lat,
+                        "min_lng": masked_result.geo_bounds.min_lng,
+                        "max_lng": masked_result.geo_bounds.max_lng,
+                    }
+                    logger.info(f"      ✅ Image masked and cropped: {masked_result.masked_width}x{masked_result.masked_height}")
+                else:
+                    logger.info(f"      ✅ Image masked (no crop needed)")
+            else:
+                logger.warning(f"      ⚠️ Masking failed: {masked_result.error_message}")
+                logger.warning(f"      Continuing with original image...")
+        else:
+            logger.info("   ℹ️ No property boundary - using full image (less accurate)")
+        
+        # ============ STEP 2: Run CV detection on (masked) image ============
+        
+        # Try Replicate Grounded SAM first (primary - more accurate)
+        if self.is_configured and not self._replicate_failed:
+            logger.info("   🎯 Using Replicate Grounded SAM (primary)...")
+            
+            result = await self._detect_with_replicate(
+                effective_image_bytes, 
+                effective_bounds, 
+                property_boundary=None,  # Already masked - no post-clipping needed
+                detect_asphalt=detect_asphalt, 
+                detect_concrete=detect_concrete, 
+                detect_buildings=detect_buildings
+            )
+            
+            # Check if Replicate succeeded AND found surfaces
+            if result.success and result.total_paved_area_m2 > 0:
+                logger.info(f"   ✅ Replicate SAM detected {result.total_paved_area_sqft:,.0f} sqft of paved surfaces")
                 return result
             
-            # Check if billing/payment issue
-            if result.error_message and ("402" in result.error_message or "Payment" in result.error_message or "credit" in result.error_message.lower()):
-                logger.warning("   ⚠️ Replicate billing issue detected - switching to Roboflow fallback")
-                self._replicate_failed = True
+            # Check if billing/payment/rate limit issue
+            if result.error_message:
+                error_lower = result.error_message.lower()
+                if "402" in result.error_message or "429" in result.error_message or "payment" in error_lower or "credit" in error_lower or "throttle" in error_lower:
+                    logger.warning("   ⚠️ Replicate billing/rate limit issue - switching to Roboflow fallback")
+                    self._replicate_failed = True
+                else:
+                    logger.warning(f"   ⚠️ Replicate error: {result.error_message}")
+            
+            # Replicate found nothing - fallback to Roboflow
+            if result.total_paved_area_m2 == 0:
+                logger.info("   ℹ️ Replicate found no surfaces - trying Roboflow fallback...")
         
-        # Fallback to Roboflow
-        logger.info("   🔄 Using Roboflow segmentation model (free fallback)...")
+        # Fallback to Roboflow (free but less accurate)
+        logger.info("   🔄 Using Roboflow segmentation model (fallback)...")
         return await self._detect_with_roboflow_fallback(
-            image_bytes, image_bounds, property_boundary
+            effective_image_bytes, 
+            effective_bounds, 
+            property_boundary=None  # Already masked
         )
     
     async def _detect_with_replicate(
@@ -180,11 +256,16 @@ class GroundedSAMService:
         property_boundary: Optional[Polygon] = None,
         detect_asphalt: bool = True,
         detect_concrete: bool = True,
-        detect_buildings: bool = True,
+        detect_buildings: bool = False,  # Default False - we typically want to exclude buildings
     ) -> SurfaceDetectionResult:
-        """Detect surfaces using Replicate's Grounded SAM."""
+        """
+        Detect paved surfaces using Replicate's Grounded SAM.
+        
+        OPTIMIZED: Uses single combined prompt for all paved surfaces to minimize API calls.
+        Cost: ~$0.002 per image instead of $0.006 for 3 separate calls.
+        """
         result = SurfaceDetectionResult()
-        billing_error = False
+        result.detection_method = "grounded_sam_replicate"
         
         try:
             # Get image dimensions
@@ -202,58 +283,67 @@ class GroundedSAMService:
             image_base64 = base64.b64encode(image_bytes).decode('utf-8')
             image_data_uri = f"data:image/jpeg;base64,{image_base64}"
             
-            # Build combined prompt for all surfaces we want to detect
-            prompts_to_run = []
-            if detect_asphalt:
-                prompts_to_run.append(("asphalt", self.SURFACE_PROMPTS["asphalt"]))
-            if detect_concrete:
-                prompts_to_run.append(("concrete", self.SURFACE_PROMPTS["concrete"]))
-            if detect_buildings:
-                prompts_to_run.append(("building", self.SURFACE_PROMPTS["building"]))
+            logger.info(f"   🎯 Running Grounded SAM via Replicate...")
+            logger.info(f"      📐 Image: {result.image_width}x{result.image_height}")
             
-            logger.info(f"🎯 Running Grounded SAM via Replicate for {len(prompts_to_run)} surface types...")
-            
-            # Run detection for each surface type
-            for surface_type, prompt in prompts_to_run:
-                logger.info(f"   🔍 Detecting {surface_type}...")
+            # OPTIMIZED: Single API call for all paved surfaces
+            # This is more efficient than separate asphalt/concrete calls
+            if detect_asphalt or detect_concrete:
+                logger.info(f"      🔍 Detecting paved surfaces...")
                 
-                surfaces, error = await self._run_grounded_sam(
+                paved_surfaces, error = await self._run_grounded_sam(
                     image_data_uri=image_data_uri,
-                    prompt=prompt,
-                    surface_type=surface_type,
+                    prompt=self.SURFACE_PROMPTS["paved"],  # Combined prompt
+                    surface_type="asphalt",  # Categorize as asphalt for now
                     image_bounds=image_bounds,
                     image_width=result.image_width,
                     image_height=result.image_height,
                     property_boundary=property_boundary,
                 )
                 
-                # Check if we got a billing error
-                if error and ("402" in error or "Payment" in error or "credit" in error.lower()):
-                    billing_error = True
-                    result.error_message = error
-                    break  # Stop trying, switch to fallback
+                # Check for errors
+                if error:
+                    error_lower = error.lower()
+                    # Critical errors - return immediately to trigger fallback
+                    if any(x in error for x in ["402", "429"]) or any(x in error_lower for x in ["payment", "credit", "throttle", "timeout"]):
+                        logger.warning(f"      ⚠️ Replicate critical error: {error}")
+                        result.error_message = error
+                        result.success = False
+                        return result
+                    else:
+                        # Non-critical error - log and continue (might still work with building detection)
+                        logger.warning(f"      ⚠️ Detection error: {error}")
+                        result.error_message = error
                 
-                if surface_type == "asphalt":
-                    result.asphalt_surfaces = surfaces
-                elif surface_type == "concrete":
-                    result.concrete_surfaces = surfaces
-                elif surface_type == "building":
-                    result.building_surfaces = surfaces
-                
-                logger.info(f"      ✅ Found {len(surfaces)} {surface_type} regions")
+                if paved_surfaces:
+                    result.asphalt_surfaces = paved_surfaces
+                    logger.info(f"      ✅ Found {len(paved_surfaces)} paved regions")
+                else:
+                    logger.info(f"      ℹ️ No paved surfaces detected")
             
-            # If billing error, return failed result to trigger fallback
-            if billing_error:
-                result.success = False
-                return result
+            # Optional: Detect buildings separately (typically skipped)
+            if detect_buildings:
+                logger.info(f"      🔍 Detecting buildings...")
+                
+                building_surfaces, error = await self._run_grounded_sam(
+                    image_data_uri=image_data_uri,
+                    prompt=self.SURFACE_PROMPTS["building"],
+                    surface_type="building",
+                    image_bounds=image_bounds,
+                    image_width=result.image_width,
+                    image_height=result.image_height,
+                    property_boundary=property_boundary,
+                )
+                
+                if building_surfaces:
+                    result.building_surfaces = building_surfaces
+                    logger.info(f"      ✅ Found {len(building_surfaces)} buildings")
             
             # Aggregate results
             result = self._aggregate_results(result, image_bounds)
             result.success = True
             
-            logger.info(f"   📊 Total asphalt: {result.total_asphalt_area_sqft:,.0f} sqft")
-            logger.info(f"   📊 Total concrete: {result.total_concrete_area_sqft:,.0f} sqft")
-            logger.info(f"   📊 Total paved: {result.total_paved_area_sqft:,.0f} sqft")
+            logger.info(f"   📊 Paved surfaces detected: {result.total_paved_area_sqft:,.0f} sqft")
             
             return result
             
@@ -591,7 +681,15 @@ class GroundedSAMService:
         image_width: int,
         image_height: int,
     ) -> Optional[Polygon]:
-        """Convert mask data to geographic polygon."""
+        """
+        Convert mask data to geographic polygon.
+        
+        Handles multiple formats:
+        - List of polygon points: [[x1,y1], [x2,y2], ...]
+        - Flat list: [x1, y1, x2, y2, ...]
+        - RLE encoded mask: {"counts": [...], "size": [h, w]}
+        - Binary mask image: numpy array or base64 encoded
+        """
         try:
             lat_range = image_bounds["max_lat"] - image_bounds["min_lat"]
             lng_range = image_bounds["max_lng"] - image_bounds["min_lng"]
@@ -619,13 +717,187 @@ class GroundedSAMService:
                         return polygon
             
             elif isinstance(mask_data, dict):
-                # RLE or other encoded format
-                # Would need to decode - for now skip
-                pass
+                # RLE encoded format: {"counts": [...], "size": [h, w]}
+                if "counts" in mask_data and "size" in mask_data:
+                    polygon = self._decode_rle_to_polygon(
+                        mask_data, image_bounds, image_width, image_height
+                    )
+                    if polygon:
+                        return polygon
+            
+            elif isinstance(mask_data, str):
+                # Base64 encoded binary mask image
+                polygon = self._decode_base64_mask_to_polygon(
+                    mask_data, image_bounds, image_width, image_height
+                )
+                if polygon:
+                    return polygon
             
             return None
             
+        except Exception as e:
+            logger.debug(f"      ⚠️ Failed to parse mask: {e}")
+            return None
+    
+    def _decode_rle_to_polygon(
+        self,
+        rle_data: Dict,
+        image_bounds: Dict[str, float],
+        image_width: int,
+        image_height: int,
+    ) -> Optional[Polygon]:
+        """Decode RLE mask to polygon using OpenCV contours."""
+        try:
+            import cv2
+            import numpy as np
+            
+            counts = rle_data.get("counts", [])
+            size = rle_data.get("size", [image_height, image_width])
+            h, w = size[0], size[1]
+            
+            # Decode RLE to binary mask
+            if isinstance(counts, str):
+                # Compressed RLE (COCO format) - decode using pycocotools if available
+                try:
+                    from pycocotools import mask as mask_utils
+                    binary_mask = mask_utils.decode(rle_data)
+                except ImportError:
+                    # Manual decompression for simple RLE
+                    binary_mask = self._simple_rle_decode(counts, h, w)
+            else:
+                # Uncompressed RLE (list of counts)
+                binary_mask = self._simple_rle_decode(counts, h, w)
+            
+            if binary_mask is None:
+                return None
+            
+            # Find contours in the binary mask
+            contours, _ = cv2.findContours(
+                binary_mask.astype(np.uint8), 
+                cv2.RETR_EXTERNAL, 
+                cv2.CHAIN_APPROX_SIMPLE
+            )
+            
+            if not contours:
+                return None
+            
+            # Get the largest contour
+            largest_contour = max(contours, key=cv2.contourArea)
+            
+            # Simplify contour
+            epsilon = 0.005 * cv2.arcLength(largest_contour, True)
+            simplified = cv2.approxPolyDP(largest_contour, epsilon, True)
+            
+            if len(simplified) < 3:
+                return None
+            
+            # Convert to geo coordinates
+            lat_range = image_bounds["max_lat"] - image_bounds["min_lat"]
+            lng_range = image_bounds["max_lng"] - image_bounds["min_lng"]
+            
+            geo_points = []
+            for point in simplified:
+                px, py = point[0]
+                lng = image_bounds["min_lng"] + (px / w) * lng_range
+                lat = image_bounds["max_lat"] - (py / h) * lat_range
+                geo_points.append((lng, lat))
+            
+            polygon = Polygon(geo_points)
+            if not polygon.is_valid:
+                polygon = polygon.buffer(0)
+            
+            return polygon
+            
+        except Exception as e:
+            logger.debug(f"      ⚠️ RLE decode failed: {e}")
+            return None
+    
+    def _simple_rle_decode(self, counts: Any, height: int, width: int) -> Optional[Any]:
+        """Decode simple RLE format to binary mask."""
+        try:
+            import numpy as np
+            
+            if isinstance(counts, str):
+                # Can't decode compressed string without pycocotools
+                return None
+            
+            # Uncompressed RLE: alternating counts of 0s and 1s
+            mask = np.zeros(height * width, dtype=np.uint8)
+            position = 0
+            value = 0
+            
+            for count in counts:
+                mask[position:position + count] = value
+                position += count
+                value = 1 - value  # Alternate between 0 and 1
+            
+            return mask.reshape((height, width), order='F')  # Column-major for COCO format
+            
         except Exception:
+            return None
+    
+    def _decode_base64_mask_to_polygon(
+        self,
+        base64_mask: str,
+        image_bounds: Dict[str, float],
+        image_width: int,
+        image_height: int,
+    ) -> Optional[Polygon]:
+        """Decode base64 encoded mask image to polygon."""
+        try:
+            import cv2
+            import numpy as np
+            
+            # Decode base64
+            if base64_mask.startswith('data:'):
+                base64_mask = base64_mask.split(',')[1]
+            
+            mask_bytes = base64.b64decode(base64_mask)
+            mask_array = np.frombuffer(mask_bytes, dtype=np.uint8)
+            mask_image = cv2.imdecode(mask_array, cv2.IMREAD_GRAYSCALE)
+            
+            if mask_image is None:
+                return None
+            
+            # Threshold to binary
+            _, binary_mask = cv2.threshold(mask_image, 127, 255, cv2.THRESH_BINARY)
+            
+            # Find contours
+            contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if not contours:
+                return None
+            
+            # Get the largest contour
+            largest_contour = max(contours, key=cv2.contourArea)
+            
+            # Simplify
+            epsilon = 0.005 * cv2.arcLength(largest_contour, True)
+            simplified = cv2.approxPolyDP(largest_contour, epsilon, True)
+            
+            if len(simplified) < 3:
+                return None
+            
+            # Convert to geo coordinates
+            h, w = mask_image.shape
+            lat_range = image_bounds["max_lat"] - image_bounds["min_lat"]
+            lng_range = image_bounds["max_lng"] - image_bounds["min_lng"]
+            
+            geo_points = []
+            for point in simplified:
+                px, py = point[0]
+                lng = image_bounds["min_lng"] + (px / w) * lng_range
+                lat = image_bounds["max_lat"] - (py / h) * lat_range
+                geo_points.append((lng, lat))
+            
+            polygon = Polygon(geo_points)
+            if not polygon.is_valid:
+                polygon = polygon.buffer(0)
+            
+            return polygon
+            
+        except Exception as e:
+            logger.debug(f"      ⚠️ Base64 mask decode failed: {e}")
             return None
     
     def _aggregate_results(
@@ -635,27 +907,112 @@ class GroundedSAMService:
     ) -> SurfaceDetectionResult:
         """Aggregate and merge detection results."""
         
-        # Merge asphalt polygons
+        # Merge asphalt polygons and create GeoJSON
         if result.asphalt_surfaces:
             polygons = [s.polygon for s in result.asphalt_surfaces if s.polygon and not s.polygon.is_empty]
             if polygons:
                 result.asphalt_polygon = unary_union(polygons)
                 result.total_asphalt_area_m2 = sum(s.area_m2 for s in result.asphalt_surfaces)
                 result.total_asphalt_area_sqft = result.total_asphalt_area_m2 * 10.764
+                # Create merged GeoJSON
+                result.asphalt_geojson = {
+                    "type": "Feature",
+                    "geometry": mapping(result.asphalt_polygon),
+                    "properties": {
+                        "surface_type": "asphalt",
+                        "area_m2": result.total_asphalt_area_m2,
+                        "area_sqft": result.total_asphalt_area_sqft,
+                        "color": self.SURFACE_COLORS.get("asphalt", "#374151"),
+                        "label": "Paved Surface",
+                    }
+                }
+                # Add to surfaces list
+                result.surfaces.append({
+                    "surface_type": "asphalt",
+                    "area_m2": result.total_asphalt_area_m2,
+                    "area_sqft": result.total_asphalt_area_sqft,
+                    "geojson": result.asphalt_geojson,
+                })
         
-        # Merge concrete polygons
+        # Merge concrete polygons and create GeoJSON
         if result.concrete_surfaces:
             polygons = [s.polygon for s in result.concrete_surfaces if s.polygon and not s.polygon.is_empty]
             if polygons:
                 result.concrete_polygon = unary_union(polygons)
                 result.total_concrete_area_m2 = sum(s.area_m2 for s in result.concrete_surfaces)
                 result.total_concrete_area_sqft = result.total_concrete_area_m2 * 10.764
+                # Create merged GeoJSON
+                result.concrete_geojson = {
+                    "type": "Feature",
+                    "geometry": mapping(result.concrete_polygon),
+                    "properties": {
+                        "surface_type": "concrete",
+                        "area_m2": result.total_concrete_area_m2,
+                        "area_sqft": result.total_concrete_area_sqft,
+                        "color": self.SURFACE_COLORS.get("concrete", "#9CA3AF"),
+                        "label": "Concrete",
+                    }
+                }
+                # Add to surfaces list
+                result.surfaces.append({
+                    "surface_type": "concrete",
+                    "area_m2": result.total_concrete_area_m2,
+                    "area_sqft": result.total_concrete_area_sqft,
+                    "geojson": result.concrete_geojson,
+                })
         
-        # Merge building polygons
+        # Merge building polygons and create GeoJSON
         if result.building_surfaces:
             polygons = [s.polygon for s in result.building_surfaces if s.polygon and not s.polygon.is_empty]
             if polygons:
                 result.building_polygon = unary_union(polygons)
+                result.building_area_m2 = sum(s.area_m2 for s in result.building_surfaces)
+                # Create merged GeoJSON
+                result.building_geojson = {
+                    "type": "Feature",
+                    "geometry": mapping(result.building_polygon),
+                    "properties": {
+                        "surface_type": "building",
+                        "area_m2": result.building_area_m2,
+                        "color": self.SURFACE_COLORS.get("building", "#DC2626"),
+                        "label": "Building",
+                    }
+                }
+                
+                # SUBTRACT buildings from paved surfaces (fixes roof detection issue)
+                if result.asphalt_polygon and not result.asphalt_polygon.is_empty:
+                    try:
+                        original_area = result.total_asphalt_area_m2
+                        result.asphalt_polygon = result.asphalt_polygon.difference(result.building_polygon)
+                        if not result.asphalt_polygon.is_empty:
+                            result.total_asphalt_area_m2 = self._calculate_area_m2(result.asphalt_polygon, image_bounds)
+                            result.total_asphalt_area_sqft = result.total_asphalt_area_m2 * 10.764
+                            # Update GeoJSON
+                            result.asphalt_geojson = {
+                                "type": "Feature",
+                                "geometry": mapping(result.asphalt_polygon),
+                                "properties": {
+                                    "surface_type": "asphalt",
+                                    "area_m2": result.total_asphalt_area_m2,
+                                    "area_sqft": result.total_asphalt_area_sqft,
+                                    "color": self.SURFACE_COLORS.get("asphalt", "#374151"),
+                                    "label": "Paved Surface",
+                                }
+                            }
+                            # Update surfaces list
+                            if result.surfaces:
+                                for s in result.surfaces:
+                                    if s.get("surface_type") == "asphalt":
+                                        s["area_m2"] = result.total_asphalt_area_m2
+                                        s["area_sqft"] = result.total_asphalt_area_sqft
+                                        s["geojson"] = result.asphalt_geojson
+                            
+                            logger.info(f"      ✂️ Subtracted buildings: {original_area:,.0f}m² → {result.total_asphalt_area_m2:,.0f}m²")
+                        else:
+                            result.total_asphalt_area_m2 = 0
+                            result.total_asphalt_area_sqft = 0
+                    except Exception as e:
+                        logger.debug(f"      ⚠️ Failed to subtract buildings: {e}")
         
         # Calculate total paved area
         result.total_paved_area_m2 = result.total_asphalt_area_m2 + result.total_concrete_area_m2

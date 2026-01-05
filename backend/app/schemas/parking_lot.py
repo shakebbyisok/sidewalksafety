@@ -101,7 +101,16 @@ class TileSummary(BaseModel):
     center_lng: float
     zoom_level: int
     bounds: Dict[str, float]
+    # Total asphalt from CV
     asphalt_area_m2: Optional[float] = 0
+    # Private asphalt (after filtering public roads)
+    private_asphalt_area_m2: Optional[float] = None
+    private_asphalt_area_sqft: Optional[float] = None
+    private_asphalt_geojson: Optional[Dict[str, Any]] = None
+    # Public roads filtered out
+    public_road_area_m2: Optional[float] = None
+    asphalt_source: Optional[str] = None
+    # Condition
     condition_score: Optional[float] = 100
     crack_count: Optional[int] = 0
     pothole_count: Optional[int] = 0
@@ -109,17 +118,51 @@ class TileSummary(BaseModel):
     has_image: bool = False
 
 
+class SurfaceBreakdown(BaseModel):
+    """Surface type breakdown (asphalt/concrete/buildings)."""
+    area_m2: Optional[float] = None
+    area_sqft: Optional[float] = None
+    geojson: Optional[Dict[str, Any]] = None
+    color: Optional[str] = None
+    label: Optional[str] = None
+
+
+class SurfacesData(BaseModel):
+    """All surface type breakdowns."""
+    asphalt: Optional[SurfaceBreakdown] = None
+    concrete: Optional[SurfaceBreakdown] = None
+    buildings: Optional[SurfaceBreakdown] = None
+
+
 class PropertyAnalysisSummary(BaseModel):
     """Summary of property analysis for embedding in parking lot response."""
     id: str
     status: str
     analysis_type: Optional[str] = "single"  # "single" or "tiled"
+    detection_method: Optional[str] = None  # "grounded_sam", "legacy_cv"
     
+    # ============ SURFACE TYPE BREAKDOWN (NEW) ============
+    surfaces: Optional[SurfacesData] = None
+    surfaces_geojson: Optional[Dict[str, Any]] = None  # FeatureCollection for all surfaces
+    
+    # Total paved (asphalt + concrete)
+    total_paved_area_m2: Optional[float] = None
+    total_paved_area_sqft: Optional[float] = None
+    
+    # ============ LEGACY FIELDS (backwards compat) ============
     # Aggregated metrics
     total_asphalt_area_m2: Optional[float] = None
     total_asphalt_area_sqft: Optional[float] = None
     parking_area_sqft: Optional[float] = None
     road_area_sqft: Optional[float] = None
+    
+    # Private asphalt (after filtering public roads)
+    private_asphalt_area_m2: Optional[float] = None
+    private_asphalt_area_sqft: Optional[float] = None
+    private_asphalt_geojson: Optional[Dict[str, Any]] = None
+    public_road_area_m2: Optional[float] = None
+    
+    # Condition
     weighted_condition_score: Optional[float] = None
     worst_tile_score: Optional[float] = None
     best_tile_score: Optional[float] = None

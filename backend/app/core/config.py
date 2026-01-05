@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     # App
     ENVIRONMENT: str = "development"
     API_V1_PREFIX: str = "/api/v1"
+    PORT: int = 5000  # Server port
     
     # Discovery Settings
     DEFAULT_MIN_LOT_AREA_M2: float = 200.0  # Minimum 200 m²

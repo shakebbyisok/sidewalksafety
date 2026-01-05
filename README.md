@@ -12,7 +12,7 @@ cp env.example .env
 # Fill in your .env file
 pip install -r requirements.txt
 python setup_db.py
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 5000
 ```
 
 ### Frontend Setup
