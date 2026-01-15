@@ -18,7 +18,10 @@ export const metadata: Metadata = {
   title: 'WorkSight - AI-Powered Property Lead Discovery',
   description: 'Discover high-value property leads with AI-powered satellite imagery analysis and business contact enrichment.',
   icons: {
-    icon: '/brand/favicon.ico',
+    icon: [
+      { url: '/brand/worksighticon.svg', type: 'image/svg+xml' },
+      { url: '/brand/favicon.ico', type: 'image/x-icon', sizes: 'any' },
+    ],
   },
 }
 
