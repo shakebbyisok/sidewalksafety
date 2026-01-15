@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from typing import Optional
+from typing import Optional, List
 import secrets
 
 
@@ -77,6 +77,13 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     API_V1_PREFIX: str = "/api/v1"
     PORT: int = 5000  # Server port
+    
+    # CORS
+    CORS_ORIGINS: List[str] = [
+        "https://app.worksight.biz",
+        "http://localhost:3000",
+        "http://localhost:3001",
+    ]
     
     # Discovery Settings
     DEFAULT_MIN_LOT_AREA_M2: float = 200.0  # Minimum 200 m²

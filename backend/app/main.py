@@ -41,11 +41,18 @@ def custom_openapi():
 
 app.openapi = custom_openapi
 
+# Get CORS origins from settings or use defaults
+cors_origins = getattr(settings, 'CORS_ORIGINS', [
+    "https://app.worksight.biz",
+    "http://localhost:3000",
+    "http://localhost:3001",
+])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
+    allow_origins=cors_origins,
+    allow_credentials=True,  # Allow cookies/auth headers
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
     expose_headers=["*"],
     max_age=3600,
