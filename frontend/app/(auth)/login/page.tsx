@@ -26,7 +26,7 @@ export default function LoginPage() {
       <div 
         className="hidden lg:flex lg:w-1/2 relative overflow-hidden"
         style={{
-          background: `#0A0F1C`
+          background: `#1A1F2C`
         }}
       >
         {/* Subtle grid pattern */}

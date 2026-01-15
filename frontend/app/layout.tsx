@@ -15,10 +15,10 @@ const inter = Inter({
 })
 
 export const metadata: Metadata = {
-  title: 'Sidewalk Safety - AI-Powered Parking Lot Lead Discovery',
-  description: 'Discover high-value parking lot repair leads with AI-powered satellite imagery analysis and business contact enrichment.',
+  title: 'WorkSight - AI-Powered Property Lead Discovery',
+  description: 'Discover high-value property leads with AI-powered satellite imagery analysis and business contact enrichment.',
   icons: {
-    icon: '/favicon.ico',
+    icon: '/brand/favicon.ico',
   },
 }
 
