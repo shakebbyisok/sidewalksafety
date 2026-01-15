@@ -20,7 +20,7 @@ export function DealList({ deals, isLoading, onEvaluate }: DealListProps) {
       <EmptyState
         title="No deals found"
         description="Start by scraping deals for a zip code or county"
-        icon={<Package className="h-10 w-10" />}
+        icon={Package}
       />
     )
   }

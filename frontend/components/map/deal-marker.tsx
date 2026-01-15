@@ -57,7 +57,7 @@ function getMarkerColor(deal: DealMapResponse): string {
 
 export function DealMarker({ deal, position, isSelected, onClick }: DealMarkerProps) {
   const map = useMap()
-  const overlayRef = useRef<google.maps.OverlayView | null>(null)
+  const overlayRef = useRef<any>(null)
   const rootRef = useRef<Root | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
 

@@ -124,8 +124,8 @@ export default function RegisterPage() {
               {/* Testimonial */}
               <div className="pt-8 border-t border-white/10 max-w-md mx-auto">
                 <p className="text-white/60 text-sm italic leading-relaxed">
-                  "WorkSight helped us identify $50K in new contracts within the first month. 
-                  The property analysis is incredibly accurate."
+                  &ldquo;WorkSight helped us identify $50K in new contracts within the first month. 
+                  The property analysis is incredibly accurate.&rdquo;
                 </p>
                 <div className="mt-4 flex items-center justify-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-white/70 text-sm font-medium">

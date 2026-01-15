@@ -415,7 +415,7 @@ function PropertyOverlay({
     const fetchData = async () => {
       try {
         const data = await parkingLotsApi.getParkingLot(dealId)
-        setPropertyData(data.property_analysis || null)
+        setPropertyData((data.property_analysis ?? null) as PropertyAnalysisSummary | null)
       } catch (error) {
         console.error('Failed to fetch property data:', error)
         setPropertyData(null)
@@ -1029,7 +1029,7 @@ function getMarkerIcon(deal: DealMapResponse, isSelected: boolean, animate: bool
   let bgColor = '#6366f1' // indigo for pending/unknown
   let textColor = '#ffffff'
   
-  if (deal.status === 'evaluated' || deal.status === 'analyzed') {
+  if (deal.status === 'evaluated') {
     if (hasScore) {
       if (score >= 80) bgColor = '#10b981' // emerald (excellent condition)
       else if (score >= 60) bgColor = '#22c55e' // green (good)
@@ -1249,10 +1249,10 @@ function ParkingLotPopup({
         <div className="flex items-center gap-1 flex-wrap">
           {/* Status */}
           <StatusChip 
-            status={deal.status === 'evaluated' || deal.status === 'analyzed' ? 'success' : deal.status === 'evaluating' ? 'info' : 'warning'}
-            icon={deal.status === 'evaluated' || deal.status === 'analyzed' ? CheckCircle2 : Clock}
+            status={deal.status === 'evaluated' ? 'success' : deal.status === 'evaluating' ? 'info' : 'warning'}
+            icon={deal.status === 'evaluated' ? CheckCircle2 : Clock}
           >
-            {deal.status === 'evaluated' || deal.status === 'analyzed' ? 'Analyzed' : deal.status === 'evaluating' ? 'Evaluating' : 'Pending'}
+            {deal.status === 'evaluated' ? 'Analyzed' : deal.status === 'evaluating' ? 'Evaluating' : 'Pending'}
           </StatusChip>
 
           {/* Lead indicator */}

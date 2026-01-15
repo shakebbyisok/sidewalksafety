@@ -140,7 +140,7 @@ export default function ParkingLotDetailPage() {
           <div>
             <h2 className="text-base font-semibold text-stone-800">Property Not Found</h2>
             <p className="text-sm text-stone-500 mt-1">
-              The property doesn't exist or you don't have access.
+              The property doesn&apos;t exist or you don&apos;t have access.
             </p>
           </div>
           <Link href="/dashboard">
@@ -161,7 +161,7 @@ export default function ParkingLotDetailPage() {
   // Analysis data
   const analysis = parkingLot.property_analysis
   const propertyBoundary = analysis?.property_boundary?.polygon
-  const regrid = parkingLot.regrid || analysis?.property_boundary
+  const regrid = analysis?.property_boundary
 
   return (
     <div className="h-full bg-stone-50 flex flex-col">
@@ -610,21 +610,21 @@ export default function ParkingLotDetailPage() {
                     <div className="space-y-1.5">
                       <span className="text-[10px] text-stone-400 uppercase tracking-wide">Surface</span>
                       <div className="flex h-2 rounded-full overflow-hidden bg-stone-100">
-                        {parkingLot.paved_percentage > 0 && (
+                        {(parkingLot.paved_percentage ?? 0) > 0 && (
                           <div 
                             className="bg-stone-600" 
                             style={{ width: `${parkingLot.paved_percentage}%` }}
                             title={`Paved: ${parkingLot.paved_percentage}%`}
                           />
                         )}
-                        {parkingLot.building_percentage > 0 && (
+                        {(parkingLot.building_percentage ?? 0) > 0 && (
                           <div 
                             className="bg-stone-400" 
                             style={{ width: `${parkingLot.building_percentage}%` }}
                             title={`Buildings: ${parkingLot.building_percentage}%`}
                           />
                         )}
-                        {parkingLot.landscaping_percentage > 0 && (
+                        {(parkingLot.landscaping_percentage ?? 0) > 0 && (
                           <div 
                             className="bg-emerald-400" 
                             style={{ width: `${parkingLot.landscaping_percentage}%` }}
@@ -633,19 +633,19 @@ export default function ParkingLotDetailPage() {
                         )}
                       </div>
                       <div className="flex items-center gap-3 text-[10px] text-stone-500">
-                        {parkingLot.paved_percentage > 0 && (
+                        {(parkingLot.paved_percentage ?? 0) > 0 && (
                           <span className="flex items-center gap-1">
                             <span className="w-2 h-2 rounded-sm bg-stone-600" />
                             Paved {parkingLot.paved_percentage}%
                           </span>
                         )}
-                        {parkingLot.building_percentage > 0 && (
+                        {(parkingLot.building_percentage ?? 0) > 0 && (
                           <span className="flex items-center gap-1">
                             <span className="w-2 h-2 rounded-sm bg-stone-400" />
                             Buildings {parkingLot.building_percentage}%
                           </span>
                         )}
-                        {parkingLot.landscaping_percentage > 0 && (
+                        {(parkingLot.landscaping_percentage ?? 0) > 0 && (
                           <span className="flex items-center gap-1">
                             <span className="w-2 h-2 rounded-sm bg-emerald-400" />
                             Green {parkingLot.landscaping_percentage}%

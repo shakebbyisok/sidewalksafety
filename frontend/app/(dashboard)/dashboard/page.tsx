@@ -53,7 +53,9 @@ export default function DashboardPage() {
   const discoveryStream = useDiscoveryStream()
 
   const { data: dealsData, isLoading } = useDeals(statusFilter)
-  const allDeals = Array.isArray(dealsData) ? dealsData : []
+  const allDeals = useMemo(() => {
+    return Array.isArray(dealsData) ? dealsData : []
+  }, [dealsData])
   
   const deals = useMemo(() => {
     let filtered = allDeals

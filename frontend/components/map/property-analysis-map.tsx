@@ -27,9 +27,14 @@ interface GeoJSONPolygon {
   coordinates: number[][][] | number[][][][]
 }
 
+interface GeoJSONPoint {
+  type: 'Point'
+  coordinates: number[]
+}
+
 interface GeoJSONFeature {
   type: 'Feature'
-  geometry: GeoJSONPolygon
+  geometry: GeoJSONPolygon | GeoJSONPoint
   properties?: Record<string, any>
 }
 
@@ -453,19 +458,20 @@ export function PropertyAnalysisMap({
     // From GeoJSON
     if (damageGeoJSON?.features) {
       damageGeoJSON.features.forEach((feature, idx) => {
-        if (feature.geometry.type !== 'Point') return
-        
-        const [lng, lat] = feature.geometry.coordinates as unknown as number[]
-        const marker: DamageMarker = {
-          lat,
-          lng,
-          type: feature.properties?.type || 'crack',
-          severity: feature.properties?.severity || 'minor',
-          confidence: feature.properties?.confidence,
+        // Only process Point geometries for damage markers
+        if (feature.geometry.type === 'Point') {
+          const [lng, lat] = (feature.geometry as GeoJSONPoint).coordinates
+          const marker: DamageMarker = {
+            lat,
+            lng,
+            type: feature.properties?.type || 'crack',
+            severity: feature.properties?.severity || 'minor',
+            confidence: feature.properties?.confidence,
+          }
+          
+          const mapMarker = createDamageMarker(map, marker, idx + (damageMarkers?.length || 0))
+          if (mapMarker) markers.push(mapMarker)
         }
-        
-        const mapMarker = createDamageMarker(map, marker, idx + (damageMarkers?.length || 0))
-        if (mapMarker) markers.push(mapMarker)
       })
     }
     

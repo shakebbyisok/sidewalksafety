@@ -5,12 +5,14 @@ import { cn } from '@/lib/utils'
 interface InputFieldProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label: string
   error?: string
+  helperText?: string
   required?: boolean
 }
 
 export function InputField({
   label,
   error,
+  helperText,
   required,
   className,
   id,
@@ -27,7 +29,7 @@ export function InputField({
       <Input
         id={fieldId}
         error={!!error}
-        helperText={error}
+        helperText={helperText || error}
         className={className}
         {...props}
       />

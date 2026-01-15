@@ -11,8 +11,9 @@ export function usePropertyAnalysis(analysisId: string | undefined) {
     queryKey: ['property-analysis', analysisId],
     queryFn: () => propertyAnalysisApi.getAnalysis(analysisId!),
     enabled: !!analysisId,
-    refetchInterval: (data) => {
+    refetchInterval: (query) => {
       // Refetch every 3 seconds while processing
+      const data = query.state.data
       if (data?.status === 'processing' || data?.status === 'pending') {
         return 3000
       }

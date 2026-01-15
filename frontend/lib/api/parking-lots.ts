@@ -34,6 +34,8 @@ export interface PropertyBoundaryInfo {
   apn?: string
   land_use?: string
   zoning?: string
+  area_acres?: number
+  year_built?: string
   polygon?: GeoJSONPolygon
 }
 
@@ -81,26 +83,26 @@ export interface AnalysisTile {
 export interface SurfaceInfo {
   area_m2?: number
   area_sqft?: number
-  geojson?: GeoJSONFeature | GeoJSONFeatureCollection | null
-  color?: string
-  label?: string
+  geojson?: GeoJSONFeature | null
+  color: string
+  label: string
 }
 
 export interface SurfacesBreakdown {
-  asphalt?: SurfaceInfo
-  concrete?: SurfaceInfo
-  buildings?: SurfaceInfo
+  asphalt: SurfaceInfo
+  concrete: SurfaceInfo
+  buildings: SurfaceInfo
 }
 
 export interface PropertyAnalysisSummary {
   id: string
   status: string
-  analysis_type?: string
-  detection_method?: string
+  analysis_type?: 'single' | 'tiled'
+  detection_method?: 'grounded_sam' | 'legacy_cv'
   
   // NEW: Surface type breakdown from Grounded SAM
   surfaces?: SurfacesBreakdown
-  surfaces_geojson?: GeoJSONFeatureCollection | null
+  surfaces_geojson?: { type: 'FeatureCollection', features: GeoJSONFeature[] }
   total_paved_area_m2?: number
   total_paved_area_sqft?: number
   
@@ -109,7 +111,7 @@ export interface PropertyAnalysisSummary {
   total_asphalt_area_sqft?: number
   private_asphalt_area_m2?: number
   private_asphalt_area_sqft?: number
-  private_asphalt_geojson?: GeoJSONFeature | GeoJSONFeatureCollection | null
+  private_asphalt_geojson?: GeoJSONFeature
   public_road_area_m2?: number
   parking_area_sqft?: number
   road_area_sqft?: number
@@ -130,7 +132,7 @@ export interface PropertyAnalysisSummary {
   tile_grid_rows?: number
   tile_grid_cols?: number
   // Lead quality
-  lead_quality?: string
+  lead_quality?: 'premium' | 'high' | 'standard' | 'low'
   hotspot_count?: number
   // Images (legacy)
   images: PropertyAnalysisImages
@@ -158,6 +160,7 @@ export interface ParkingLotDetail {
   pothole_score?: number
   line_fading_score?: number
   satellite_image_url?: string
+  satellite_image_base64?: string
   is_evaluated: boolean
   data_sources: string[]
   degradation_areas?: Array<Record<string, any>>
@@ -169,6 +172,14 @@ export interface ParkingLotDetail {
   business?: BusinessSummary
   match_score?: number
   distance_meters?: number
+  lead_score?: number
+  lead_quality?: 'high' | 'medium' | 'low'
+  paved_percentage?: number
+  building_percentage?: number
+  landscaping_percentage?: number
+  analysis_notes?: string
+  analyzed_at?: string
+  status?: string
   property_analysis?: PropertyAnalysisSummary
   contact?: ContactInfo
   // Enrichment flow for UI

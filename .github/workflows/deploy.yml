@@ -7,7 +7,8 @@ on:
   workflow_dispatch:  # Allow manual triggers
 
 env:
-  DOMAIN: worksight.biz  # Change this to your domain
+  FRONTEND_DOMAIN: app.worksight.biz
+  BACKEND_DOMAIN: api.worksight.biz
   
 jobs:
   deploy:
@@ -80,8 +81,8 @@ jobs:
             set -e
             
             DEPLOY_PATH="${{ secrets.VM_DEPLOY_PATH || '/home/${{ secrets.VM_USER }}/worksight' }}"
-            DOMAIN="${{ secrets.DOMAIN || 'worksight.biz' }}"
-            API_DOMAIN="api.${DOMAIN}"
+            FRONTEND_DOMAIN="${{ secrets.FRONTEND_DOMAIN || 'app.worksight.biz' }}"
+            BACKEND_DOMAIN="${{ secrets.BACKEND_DOMAIN || 'api.worksight.biz' }}"
             
             echo "📦 Starting deployment to $DEPLOY_PATH"
             
@@ -169,7 +170,7 @@ jobs:
             # Frontend
             server {
                 listen 80;
-                server_name ${DOMAIN} www.${DOMAIN};
+                server_name ${FRONTEND_DOMAIN};
                 
                 location / {
                     proxy_pass http://localhost:3000;
@@ -188,7 +189,7 @@ jobs:
             # Backend API
             server {
                 listen 80;
-                server_name ${API_DOMAIN};
+                server_name ${BACKEND_DOMAIN};
                 
                 client_max_body_size 50M;
                 
@@ -353,9 +354,9 @@ jobs:
             # ============================================
             # SSL SETUP (only on first run or if missing)
             # ============================================
-            if [ ! -d "/etc/letsencrypt/live/${DOMAIN}" ]; then
+            if [ ! -d "/etc/letsencrypt/live/${FRONTEND_DOMAIN}" ]; then
               echo "🔒 Setting up SSL certificates..."
-              sudo certbot --nginx -d ${DOMAIN} -d www.${DOMAIN} -d ${API_DOMAIN} --non-interactive --agree-tos --email ${{ secrets.SSL_EMAIL || 'admin@' }}${DOMAIN} || echo "⚠️ SSL setup failed - configure DNS first"
+              sudo certbot --nginx -d ${FRONTEND_DOMAIN} -d ${BACKEND_DOMAIN} --non-interactive --agree-tos --email ${{ secrets.SSL_EMAIL || 'admin@worksight.biz' }} || echo "⚠️ SSL setup failed - configure DNS first"
             else
               echo "🔒 SSL certificates already exist, attempting renewal..."
               sudo certbot renew --quiet || true
@@ -372,11 +373,11 @@ jobs:
             echo "============================================"
             echo "✅ DEPLOYMENT COMPLETED!"
             echo "============================================"
-            echo "Frontend: https://${DOMAIN}"
-            echo "Backend:  https://${API_DOMAIN}"
+            echo "Frontend: https://${FRONTEND_DOMAIN}"
+            echo "Backend:  https://${BACKEND_DOMAIN}"
             echo ""
             echo "⚠️ If this is the first deployment:"
-            echo "   1. Configure DNS A records for ${DOMAIN} and ${API_DOMAIN}"
+            echo "   1. Configure DNS A records for ${FRONTEND_DOMAIN} and ${BACKEND_DOMAIN}"
             echo "   2. Edit backend/.env with your API keys"
             echo "   3. Run: sudo systemctl restart worksight-backend"
             echo "============================================"

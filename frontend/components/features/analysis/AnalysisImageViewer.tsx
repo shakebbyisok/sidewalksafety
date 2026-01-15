@@ -45,10 +45,10 @@ export function AnalysisImageViewer({
   }
 
   const images: { key: ImageType; src: string | undefined }[] = [
-    { key: 'wide_satellite', src: toDataUrl(analysis.images.wide_satellite) },
-    { key: 'segmentation', src: toDataUrl(analysis.images.segmentation) },
-    { key: 'property_boundary', src: toDataUrl(analysis.images.property_boundary) },
-    { key: 'condition_analysis', src: toDataUrl(analysis.images.condition_analysis) },
+    { key: 'wide_satellite' as ImageType, src: toDataUrl(analysis.images.wide_satellite) },
+    { key: 'segmentation' as ImageType, src: toDataUrl(analysis.images.segmentation) },
+    { key: 'property_boundary' as ImageType, src: toDataUrl(analysis.images.property_boundary) },
+    { key: 'condition_analysis' as ImageType, src: toDataUrl(analysis.images.condition_analysis) },
   ].filter(img => img.src)
 
   const currentImage = images.find(img => img.key === selectedImage)
