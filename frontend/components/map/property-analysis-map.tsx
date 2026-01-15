@@ -284,19 +284,24 @@ export function PropertyAnalysisMap({
 
   // Draw surface areas (NEW: Uses Grounded SAM surfaces or falls back to legacy)
   const drawSurfaceAreas = (map: any) => {
-    // NEW: If we have surfaces from Grounded SAM, use those
+    let hasDrawnSurfaces = false
+    
+    // NEW: If we have surfaces from Grounded SAM with geojson, use those
     if (surfaces) {
       // Draw asphalt
       if (surfaces.asphalt?.geojson) {
-        const polygons = drawSurfacePolygon(
-          map, 
-          surfaces.asphalt.geojson as unknown as GeoJSONFeature, 
-          'asphalt',
-          surfaces.asphalt.color || '#374151',
-          surfaces.asphalt.area_sqft,
-          'Paved Surface'
-        )
-        overlaysRef.current.asphalt = polygons
+        // Handle both single Feature and FeatureCollection
+        const geojson = surfaces.asphalt.geojson as any
+        if (geojson.type === 'FeatureCollection' && geojson.features) {
+          geojson.features.forEach((feature: GeoJSONFeature) => {
+            const polygons = drawSurfacePolygon(map, feature, 'asphalt', surfaces.asphalt?.color || '#374151', undefined, 'Paved')
+            overlaysRef.current.asphalt.push(...polygons)
+          })
+        } else {
+          const polygons = drawSurfacePolygon(map, geojson as GeoJSONFeature, 'asphalt', surfaces.asphalt.color || '#374151', surfaces.asphalt.area_sqft, 'Paved Surface')
+          overlaysRef.current.asphalt = polygons
+        }
+        hasDrawnSurfaces = true
       }
       
       // Draw concrete
@@ -310,6 +315,7 @@ export function PropertyAnalysisMap({
           'Concrete'
         )
         overlaysRef.current.concrete = polygons
+        hasDrawnSurfaces = true
       }
       
       // Draw buildings
@@ -323,12 +329,14 @@ export function PropertyAnalysisMap({
           'Building'
         )
         overlaysRef.current.buildings = polygons
+        hasDrawnSurfaces = true
       }
       
-      return
+      // If we drew surfaces from the structured data, we're done
+      if (hasDrawnSurfaces) return
     }
     
-    // NEW: If we have surfacesGeoJSON (FeatureCollection), parse it
+    // FALLBACK: If we have surfacesGeoJSON (FeatureCollection), parse it
     if (surfacesGeoJSON?.features) {
       surfacesGeoJSON.features.forEach((feature: GeoJSONFeature) => {
         const surfaceType = feature.properties?.surface_type || feature.properties?.type || 'asphalt'

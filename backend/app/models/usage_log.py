@@ -16,22 +16,18 @@ class UsageLog(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     
     # What was used
-    action = Column(String, nullable=False, index=True)  # 'discovery', 'cv_evaluation', 'api_call'
-    resource = Column(String, index=True)  # 'inrix', 'here', 'osm', 'google_maps', 'google_places', 'roboflow'
+    service = Column(String(50), nullable=False, index=True)  # 'google_places', 'regrid', 'satellite', 'vlm'
+    operation = Column(String(100), nullable=True)
     
-    # Quantities
-    count = Column(Integer, default=1)
-    bytes_processed = Column(BigInteger)  # For CV: image size in bytes
-    
-    # Cost tracking (estimated)
-    estimated_cost = Column(Numeric(10, 6))  # In USD
+    # Metrics
+    api_calls = Column(Integer, default=1)
+    tokens_used = Column(Integer, nullable=True)
+    cost_estimate = Column(Numeric(10, 6), nullable=True)
     
     # Context
-    job_id = Column(UUID(as_uuid=True), index=True)
-    parking_lot_id = Column(UUID(as_uuid=True))
-    
-    # Additional details
-    details = Column(JSONB)
+    property_id = Column(UUID(as_uuid=True), ForeignKey("properties.id", ondelete="SET NULL"), nullable=True)
+    job_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    extra_data = Column(JSONB, nullable=True)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
@@ -40,5 +36,5 @@ class UsageLog(Base):
     user = relationship("User", back_populates="usage_logs")
     
     def __repr__(self):
-        return f"<UsageLog {self.action}:{self.resource} user={self.user_id}>"
+        return f"<UsageLog {self.service}:{self.operation} user={self.user_id}>"
 

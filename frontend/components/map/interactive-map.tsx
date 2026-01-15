@@ -3,11 +3,19 @@
 import { useMemo, useCallback, useEffect, useState, useRef } from 'react'
 import { APIProvider, Map, Marker, useMap, InfoWindow, useMapsLibrary } from '@vis.gl/react-google-maps'
 import { MarkerClusterer, GridAlgorithm } from '@googlemaps/markerclusterer'
-import { DealMapResponse } from '@/types'
-import { MapPin, ExternalLink, Satellite, Map as MapIcon, X, CheckCircle2, Clock, Target, Building2, Phone, Globe, AlertTriangle, Search, Loader2 } from 'lucide-react'
+import { DealMapResponse, PropertyAnalysisSummary } from '@/types'
+import { MapPin, ExternalLink, Satellite, Map as MapIcon, X, CheckCircle2, Clock, Target, Building2, Phone, Globe, AlertTriangle, Search, Loader2, Layers, User } from 'lucide-react'
 import { StatusChip, IconChip } from '@/components/ui'
 import { cn } from '@/lib/utils'
 import { parkingLotsApi } from '@/lib/api/parking-lots'
+
+// Surface colors for polygon overlays
+const SURFACE_COLORS: Record<string, { fill: string; stroke: string; label: string }> = {
+  asphalt: { fill: '#374151', stroke: '#1F2937', label: 'Paved' },
+  concrete: { fill: '#9CA3AF', stroke: '#6B7280', label: 'Concrete' },
+  building: { fill: '#DC2626', stroke: '#991B1B', label: 'Building' },
+  property_boundary: { fill: '#3B82F6', stroke: '#1D4ED8', label: 'Property' },
+}
 
 interface InteractiveMapProps {
   deals: DealMapResponse[]
@@ -17,6 +25,7 @@ interface InteractiveMapProps {
   onBoundsChange?: (bounds: { minLat: number; maxLat: number; minLng: number; maxLng: number }) => void
   onMapClick?: (lat: number, lng: number) => void
   clickedLocation?: { lat: number; lng: number } | null
+  previewPolygon?: any // GeoJSON polygon to preview on map
 }
 
 // Clean, modern map style with subtle colors
@@ -384,6 +393,203 @@ function SearchLocationController({
   return null
 }
 
+// Property overlay component - renders GeoJSON polygons for selected property
+function PropertyOverlay({
+  dealId,
+  visible,
+}: {
+  dealId: string | null
+  visible: boolean
+}) {
+  const map = useMap()
+  const polygonsRef = useRef<google.maps.Polygon[]>([])
+  const [propertyData, setPropertyData] = useState<PropertyAnalysisSummary | null>(null)
+  
+  // Fetch property data when deal changes
+  useEffect(() => {
+    if (!dealId) {
+      setPropertyData(null)
+      return
+    }
+    
+    const fetchData = async () => {
+      try {
+        const data = await parkingLotsApi.getParkingLot(dealId)
+        setPropertyData(data.property_analysis || null)
+      } catch (error) {
+        console.error('Failed to fetch property data:', error)
+        setPropertyData(null)
+      }
+    }
+    
+    fetchData()
+  }, [dealId])
+  
+  // Draw polygons when data or visibility changes
+  useEffect(() => {
+    if (!map) return
+    
+    // Clear existing polygons
+    polygonsRef.current.forEach(p => p.setMap(null))
+    polygonsRef.current = []
+    
+    if (!visible || !propertyData) return
+    
+    // Helper to convert GeoJSON coordinates to Google Maps LatLng
+    const coordsToLatLng = (coords: number[][]): google.maps.LatLngLiteral[] => {
+      return coords.map(coord => ({
+        lat: coord[1],
+        lng: coord[0]
+      }))
+    }
+    
+    // Helper to draw a polygon
+    const drawPolygon = (
+      geometry: any,
+      color: { fill: string; stroke: string },
+      fillOpacity: number = 0.4
+    ) => {
+      if (!geometry?.coordinates) return
+      
+      const createPoly = (paths: google.maps.LatLngLiteral[]) => {
+        const polygon = new google.maps.Polygon({
+          paths,
+          strokeColor: color.stroke,
+          strokeOpacity: 0.9,
+          strokeWeight: 2,
+          fillColor: color.fill,
+          fillOpacity,
+          map,
+          zIndex: fillOpacity < 0.2 ? 1 : 2, // Property boundary behind surfaces
+        })
+        polygonsRef.current.push(polygon)
+      }
+      
+      if (geometry.type === 'Polygon') {
+        createPoly(coordsToLatLng(geometry.coordinates[0]))
+      } else if (geometry.type === 'MultiPolygon') {
+        geometry.coordinates.forEach((polyCoords: number[][][]) => {
+          createPoly(coordsToLatLng(polyCoords[0]))
+        })
+      }
+    }
+    
+    // Draw property boundary (light fill)
+    if (propertyData.property_boundary?.polygon) {
+      drawPolygon(
+        propertyData.property_boundary.polygon,
+        SURFACE_COLORS.property_boundary,
+        0.1
+      )
+    }
+    
+    // Draw surfaces from surfaces_geojson
+    if (propertyData.surfaces_geojson?.features) {
+      propertyData.surfaces_geojson.features.forEach((feature: any) => {
+        const surfaceType = feature.properties?.surface_type || 'asphalt'
+        const colors = SURFACE_COLORS[surfaceType] || SURFACE_COLORS.asphalt
+        const customColor = feature.properties?.color
+        
+        drawPolygon(
+          feature.geometry,
+          customColor ? { fill: customColor, stroke: customColor } : colors,
+          surfaceType === 'building' ? 0.3 : 0.5
+        )
+      })
+    } else if (propertyData.surfaces) {
+      // Fallback to individual surfaces
+      if (propertyData.surfaces.asphalt?.geojson) {
+        const geo = propertyData.surfaces.asphalt.geojson as any
+        drawPolygon(geo.geometry || geo, SURFACE_COLORS.asphalt)
+      }
+      if (propertyData.surfaces.concrete?.geojson) {
+        const geo = propertyData.surfaces.concrete.geojson as any
+        drawPolygon(geo.geometry || geo, SURFACE_COLORS.concrete)
+      }
+      if (propertyData.surfaces.buildings?.geojson) {
+        const geo = propertyData.surfaces.buildings.geojson as any
+        drawPolygon(geo.geometry || geo, SURFACE_COLORS.building, 0.3)
+      }
+    }
+    
+    return () => {
+      polygonsRef.current.forEach(p => p.setMap(null))
+      polygonsRef.current = []
+    }
+  }, [map, propertyData, visible])
+  
+  return null
+}
+
+// Component to draw preview polygon on map
+function PreviewPolygonLayer({ polygon }: { polygon: any }) {
+  const map = useMap()
+  const polygonRef = useRef<google.maps.Polygon | null>(null)
+
+  useEffect(() => {
+    if (!map || !polygon) {
+      // Clean up existing polygon
+      if (polygonRef.current) {
+        polygonRef.current.setMap(null)
+        polygonRef.current = null
+      }
+      return
+    }
+
+    // Parse GeoJSON coordinates
+    let coords: google.maps.LatLngLiteral[] = []
+    try {
+      if (polygon.type === 'Polygon' && polygon.coordinates) {
+        coords = polygon.coordinates[0].map((coord: number[]) => ({
+          lat: coord[1],
+          lng: coord[0],
+        }))
+      } else if (polygon.type === 'MultiPolygon' && polygon.coordinates) {
+        // Take first polygon of multi-polygon
+        coords = polygon.coordinates[0][0].map((coord: number[]) => ({
+          lat: coord[1],
+          lng: coord[0],
+        }))
+      }
+    } catch (e) {
+      console.error('Failed to parse polygon:', e)
+      return
+    }
+
+    if (coords.length === 0) return
+
+    // Create or update polygon
+    if (polygonRef.current) {
+      polygonRef.current.setPath(coords)
+    } else {
+      polygonRef.current = new google.maps.Polygon({
+        paths: coords,
+        strokeColor: '#3B82F6',
+        strokeOpacity: 1,
+        strokeWeight: 3,
+        fillColor: '#3B82F6',
+        fillOpacity: 0.15,
+        map: map,
+        zIndex: 1000,
+      })
+    }
+
+    // Fit bounds to polygon
+    const bounds = new google.maps.LatLngBounds()
+    coords.forEach(coord => bounds.extend(coord))
+    map.fitBounds(bounds, { top: 50, right: 350, bottom: 50, left: 50 })
+
+    return () => {
+      if (polygonRef.current) {
+        polygonRef.current.setMap(null)
+        polygonRef.current = null
+      }
+    }
+  }, [map, polygon])
+  
+  return null
+}
+
 export function InteractiveMap({
   deals,
   selectedDeal,
@@ -392,9 +598,11 @@ export function InteractiveMap({
   onBoundsChange,
   onMapClick,
   clickedLocation,
+  previewPolygon,
 }: InteractiveMapProps) {
   const [mapType, setMapType] = useState<'roadmap' | 'hybrid'>('roadmap')
   const [searchLocation, setSearchLocation] = useState<{ lat: number; lng: number; name: string } | null>(null)
+  const [showOverlay, setShowOverlay] = useState(true) // Show property boundaries by default
   
   const handlePlaceSelect = useCallback((lat: number, lng: number, name: string) => {
     setSearchLocation({ lat, lng, name })
@@ -448,6 +656,26 @@ export function InteractiveMap({
           {/* Search Box */}
           <PlaceSearchBox onPlaceSelect={handlePlaceSelect} />
           
+          <div className="flex items-center gap-2">
+            {/* Show Overlay Toggle (only visible when deal is selected) */}
+            {selectedDeal && (
+              <div className="relative">
+                <button
+                  onClick={() => setShowOverlay(prev => !prev)}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-2.5 rounded-lg shadow-lg hover:shadow-xl transition-all border",
+                    showOverlay 
+                      ? "bg-blue-500 text-white border-blue-600 hover:bg-blue-600" 
+                      : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+                  )}
+                  title={showOverlay ? 'Hide Property Boundaries' : 'Show Property Boundaries'}
+                >
+                  <Layers className="h-4 w-4" />
+                  <span className="text-sm font-medium">Segments</span>
+                </button>
+              </div>
+            )}
+          
           {/* Map Type Toggle Button */}
           <button
             onClick={toggleMapType}
@@ -466,6 +694,7 @@ export function InteractiveMap({
               </>
             )}
           </button>
+          </div>
         </div>
         <Map
           defaultCenter={defaultCenter}
@@ -485,6 +714,15 @@ export function InteractiveMap({
           <MapTypeController mapType={mapType} onMapTypeChange={setMapType} />
           <CenterMapController selectedDeal={selectedDeal} />
           <SearchLocationController searchLocation={searchLocation} />
+          
+          {/* Property boundary and segment overlays */}
+          <PropertyOverlay 
+            dealId={selectedDeal?.id || null}
+            visible={showOverlay}
+          />
+          
+          {/* Preview polygon for clicked location */}
+          {previewPolygon && <PreviewPolygonLayer polygon={previewPolygon} />}
 
           <MarkerClustererComponent
             deals={dealsWithLocation}
@@ -532,6 +770,31 @@ export function InteractiveMap({
             </InfoWindow>
           )}
         </Map>
+        
+        {/* Segment Legend - shows when overlay is visible and deal is selected */}
+        {selectedDeal && showOverlay && (
+          <div className="absolute bottom-4 left-4 bg-white/95 backdrop-blur-sm rounded-lg shadow-lg border border-slate-200 px-3 py-2">
+            <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Detected Segments</div>
+            <div className="flex items-center gap-3 text-xs">
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded-sm border-2" style={{ borderColor: '#1D4ED8', backgroundColor: 'rgba(59, 130, 246, 0.2)' }} />
+                <span className="text-slate-600">Property</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#374151' }} />
+                <span className="text-slate-600">Paved</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#9CA3AF' }} />
+                <span className="text-slate-600">Concrete</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#DC2626' }} />
+                <span className="text-slate-600">Building</span>
+              </div>
+            </div>
+          </div>
+        )}
       </APIProvider>
     </div>
   )
@@ -549,7 +812,20 @@ function MarkerClustererComponent({
   const map = useMap()
   const clustererRef = useRef<MarkerClusterer | null>(null)
   const markersRef = useRef<google.maps.Marker[]>([])
+  // Use refs to avoid recreating markers when callbacks/selection changes
+  const onDealSelectRef = useRef(onDealSelect)
+  const dealsRef = useRef(deals)
+  
+  // Keep refs up to date
+  useEffect(() => {
+    onDealSelectRef.current = onDealSelect
+  }, [onDealSelect])
+  
+  useEffect(() => {
+    dealsRef.current = deals
+  }, [deals])
 
+  // Create markers only when map or deals change (not on selection change)
   useEffect(() => {
     if (!map || deals.length === 0) return
 
@@ -559,17 +835,18 @@ function MarkerClustererComponent({
       clustererRef.current = null
     }
 
-    // Create markers for each deal
-    const markers: google.maps.Marker[] = deals.map((deal) => {
+    // Create markers for each deal with initial animation
+    const markers: google.maps.Marker[] = deals.map((deal, index) => {
       const marker = new google.maps.Marker({
         position: { lat: deal.latitude!, lng: deal.longitude! },
-        icon: getMarkerIcon(deal, selectedDeal?.id === deal.id),
+        icon: getMarkerIcon(deal, false, true), // Initial state with animation
         map: null, // Don't add to map directly, clusterer will handle it
+        optimized: false, // Required for SVG animations to work
       })
 
-      // Add click handler
+      // Add click handler using ref to avoid stale closure
       marker.addListener('click', () => {
-        onDealSelect(deal)
+        onDealSelectRef.current(dealsRef.current[index] || deal)
       })
 
       return marker
@@ -577,73 +854,68 @@ function MarkerClustererComponent({
 
     markersRef.current = markers
 
-    // Create custom cluster renderer - elegant, smooth, minimalist
+    // Create custom cluster renderer - iOS-style circles with smooth animations
     const customRenderer = {
       render: (cluster: any) => {
         const count = cluster.count
         const position = cluster.position
 
-        // Subtle size scaling - more refined
+        // Size based on count - circles
         const size = count < 10 ? 36 : count < 50 ? 42 : count < 100 ? 48 : 54
         const fontSize = count < 10 ? 13 : count < 50 ? 14 : count < 100 ? 15 : 16
-        const fontWeight = 500 // Lighter, more elegant weight
+        const borderWidth = 2.5
         
-        // Soft, refined color palette - subtle orange with transparency
-        const bgColor = count < 10 ? '#f97316' : count < 50 ? '#ea580c' : '#c2410c'
+        // Slate/gray color for clusters to differentiate from score pins
+        const bgColor = '#475569' // slate-600
         const textColor = '#ffffff'
-        const borderColor = '#ffffff'
-        const borderWidth = 1.5 // Thinner, more refined border
 
-        // Create cluster marker with elegant styling
+        // Create cluster marker with circle styling and pop-in animation
         const clusterMarker = new google.maps.Marker({
           position,
           icon: {
             url: `data:image/svg+xml,${encodeURIComponent(`
               <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
                 <defs>
-                  <!-- Subtle, soft shadow -->
-                  <filter id="soft-shadow-${count}" x="-50%" y="-50%" width="200%" height="200%">
-                    <feGaussianBlur in="SourceAlpha" stdDeviation="1.5"/>
-                    <feOffset dx="0" dy="1" result="offsetblur"/>
-                    <feComponentTransfer>
-                      <feFuncA type="linear" slope="0.2"/>
-                    </feComponentTransfer>
-                    <feMerge>
-                      <feMergeNode/>
-                      <feMergeNode in="SourceGraphic"/>
-                    </feMerge>
+                  <style>
+                    @keyframes clusterPop {
+                      0% { transform: scale(0.6); opacity: 0; }
+                      60% { transform: scale(1.08); }
+                      100% { transform: scale(1); opacity: 1; }
+                    }
+                    .cluster-group { 
+                      animation: clusterPop 0.2s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+                      transform-origin: center center;
+                    }
+                  </style>
+                  <!-- iOS-style shadow -->
+                  <filter id="cluster-shadow" x="-30%" y="-30%" width="160%" height="160%">
+                    <feDropShadow dx="0" dy="1" stdDeviation="2.5" flood-color="#000000" flood-opacity="0.3"/>
                   </filter>
-                  <!-- Smooth gradient for depth -->
-                  <linearGradient id="gradient-${count}" x1="0%" y1="0%" x2="0%" y2="100%">
-                    <stop offset="0%" style="stop-color:${bgColor};stop-opacity:1" />
-                    <stop offset="100%" style="stop-color:${bgColor};stop-opacity:0.9" />
-                  </linearGradient>
                 </defs>
-                <!-- Main circle with gradient -->
-                <circle 
-                  cx="${size / 2}" 
-                  cy="${size / 2}" 
-                  r="${size / 2 - borderWidth}" 
-                  fill="url(#gradient-${count})" 
-                  stroke="${borderColor}" 
-                  stroke-width="${borderWidth}"
-                  stroke-opacity="0.95"
-                  filter="url(#soft-shadow-${count})"
-                />
-                <!-- Elegant text -->
-                <text 
-                  x="${size / 2}" 
-                  y="${size / 2}" 
-                  font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif" 
-                  font-size="${fontSize}" 
-                  font-weight="${fontWeight}" 
-                  fill="${textColor}" 
-                  text-anchor="middle" 
-                  dominant-baseline="central"
-                  font-variant-numeric="tabular-nums"
-                  letter-spacing="-0.01em"
-                  opacity="0.98"
-                >${count}</text>
+                <g class="cluster-group">
+                  <!-- Circle background -->
+                  <circle 
+                    cx="${size / 2}" 
+                    cy="${size / 2}" 
+                    r="${size / 2 - borderWidth}"
+                    fill="${bgColor}"
+                    stroke="white"
+                    stroke-width="${borderWidth}"
+                    filter="url(#cluster-shadow)"
+                  />
+                  <!-- Count text - SF Pro style -->
+                  <text 
+                    x="${size / 2}" 
+                    y="${size / 2}" 
+                    font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', system-ui, sans-serif" 
+                    font-size="${fontSize}" 
+                    font-weight="600" 
+                    fill="${textColor}" 
+                    text-anchor="middle" 
+                    dominant-baseline="central"
+                    letter-spacing="-0.02em"
+                  >${count}</text>
+                </g>
               </svg>
             `)}`,
             scaledSize: new google.maps.Size(size, size),
@@ -705,89 +977,146 @@ function MarkerClustererComponent({
         }
       })
     }
-  }, [map, deals, selectedDeal, onDealSelect])
+  }, [map, deals]) // Only recreate when map or deals change
 
-  // Update marker icons when selection changes
+  // Re-animate markers on zoom change (when clusters split/merge)
+  useEffect(() => {
+    if (!map) return
+    
+    let zoomTimeout: NodeJS.Timeout
+    const handleZoomChange = () => {
+      // Debounce to avoid multiple triggers
+      clearTimeout(zoomTimeout)
+      zoomTimeout = setTimeout(() => {
+        // Re-apply icons with animation after zoom settles
+        markersRef.current.forEach((marker, index) => {
+          const deal = dealsRef.current[index]
+          if (deal && marker.getMap()) {
+            marker.setIcon(getMarkerIcon(deal, false, true))
+          }
+        })
+      }, 100)
+    }
+    
+    const zoomListener = map.addListener('zoom_changed', handleZoomChange)
+    
+    return () => {
+      clearTimeout(zoomTimeout)
+      google.maps.event.removeListener(zoomListener)
+    }
+  }, [map])
+
+  // Update marker icons when selection changes (without recreating markers)
   useEffect(() => {
     if (!map || markersRef.current.length === 0) return
 
     markersRef.current.forEach((marker, index) => {
       const deal = deals[index]
       if (deal) {
-        marker.setIcon(getMarkerIcon(deal, selectedDeal?.id === deal.id))
+        marker.setIcon(getMarkerIcon(deal, selectedDeal?.id === deal.id, false))
       }
     })
-  }, [map, deals, selectedDeal])
+  }, [selectedDeal?.id, deals]) // Only update icons on selection change
 
   return null
 }
 
-function getMarkerIcon(deal: DealMapResponse, isSelected: boolean) {
-  let color = '#f97316'
+function getMarkerIcon(deal: DealMapResponse, isSelected: boolean, animate: boolean = false) {
+  const score = deal.lead_score ?? deal.score
+  const hasScore = score !== null && score !== undefined
   
-  if (deal.status === 'evaluated') {
-    // Inverted: low score (bad condition) = green (opportunity)
-    if (deal.score !== null && deal.score !== undefined) {
-      if (deal.score <= 30) color = '#10b981' // emerald
-      else if (deal.score <= 50) color = '#84cc16' // lime
-      else if (deal.score <= 70) color = '#f59e0b' // amber
-      else color = '#ef4444' // red (good condition = not interesting)
+  // Color based on score: high score = green (good condition), low score = red (needs work)
+  let bgColor = '#6366f1' // indigo for pending/unknown
+  let textColor = '#ffffff'
+  
+  if (deal.status === 'evaluated' || deal.status === 'analyzed') {
+    if (hasScore) {
+      if (score >= 80) bgColor = '#10b981' // emerald (excellent condition)
+      else if (score >= 60) bgColor = '#22c55e' // green (good)
+      else if (score >= 40) bgColor = '#f59e0b' // amber (fair)
+      else bgColor = '#ef4444' // red (needs attention)
     } else {
-      color = '#22c55e'
+      bgColor = '#6366f1' // indigo if no score
     }
   } else if (deal.status === 'evaluating') {
-    color = '#3b82f6'
+    bgColor = '#3b82f6' // blue
   }
 
-  const scale = isSelected ? 1.2 : 1
-  const size = 28 * scale
-  const borderWidth = 1.5
+  const scale = isSelected ? 1.15 : 1
+  const width = 38 * scale
+  const boxHeight = 26 * scale
+  const arrowHeight = 8 * scale
+  const totalHeight = boxHeight + arrowHeight
+  const borderRadius = 6 * scale
+  const borderWidth = 2
+  const fontSize = hasScore ? 13 * scale : 10 * scale
+  const displayText = hasScore ? Math.round(score) : '•••'
+  
+  // Animation styles for smooth appearance
+  const animationStyle = animate ? `
+    <style>
+      @keyframes popIn {
+        0% { transform: scale(0.5); opacity: 0; }
+        70% { transform: scale(1.1); }
+        100% { transform: scale(1); opacity: 1; }
+      }
+      .marker-group { 
+        animation: popIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+        transform-origin: center bottom;
+      }
+    </style>
+  ` : ''
 
+  // Location pin style: rounded box with arrow pointing down
   return {
     url: `data:image/svg+xml,${encodeURIComponent(`
-      <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+      <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${totalHeight}" viewBox="0 0 ${width} ${totalHeight}">
         <defs>
-          <!-- Subtle, soft shadow -->
-          <filter id="marker-shadow-${deal.id}" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur in="SourceAlpha" stdDeviation="1"/>
-            <feOffset dx="0" dy="0.5" result="offsetblur"/>
-            <feComponentTransfer>
-              <feFuncA type="linear" slope="0.25"/>
-            </feComponentTransfer>
-            <feMerge>
-              <feMergeNode/>
-              <feMergeNode in="SourceGraphic"/>
-            </feMerge>
+          ${animationStyle}
+          <!-- iOS-style shadow -->
+          <filter id="pin-shadow" x="-30%" y="-20%" width="160%" height="160%">
+            <feDropShadow dx="0" dy="1.5" stdDeviation="2" flood-color="#000000" flood-opacity="0.3"/>
           </filter>
-          <!-- Smooth gradient -->
-          <linearGradient id="marker-gradient-${deal.id}" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" style="stop-color:${color};stop-opacity:1" />
-            <stop offset="100%" style="stop-color:${color};stop-opacity:0.92" />
-          </linearGradient>
         </defs>
-        <!-- Outer circle with gradient -->
-        <circle 
-          cx="${size / 2}" 
-          cy="${size / 2}" 
-          r="${size / 2 - borderWidth}" 
-          fill="url(#marker-gradient-${deal.id})" 
-          stroke="white" 
-          stroke-width="${borderWidth}"
-          stroke-opacity="0.95"
-          filter="url(#marker-shadow-${deal.id})"
-        />
-        <!-- Inner dot - smaller and more refined -->
-        <circle 
-          cx="${size / 2}" 
-          cy="${size / 2}" 
-          r="${size / 6}" 
-          fill="white" 
-          opacity="0.98"
-        />
+        <g class="marker-group">
+          <!-- Pin shape: rounded rect + triangle arrow -->
+          <path 
+            d="M${borderRadius + borderWidth/2},${borderWidth/2} 
+               H${width - borderRadius - borderWidth/2} 
+               Q${width - borderWidth/2},${borderWidth/2} ${width - borderWidth/2},${borderRadius + borderWidth/2}
+               V${boxHeight - borderRadius - borderWidth/2}
+               Q${width - borderWidth/2},${boxHeight - borderWidth/2} ${width - borderRadius - borderWidth/2},${boxHeight - borderWidth/2}
+               H${width/2 + arrowHeight/1.5}
+               L${width/2},${totalHeight - borderWidth}
+               L${width/2 - arrowHeight/1.5},${boxHeight - borderWidth/2}
+               H${borderRadius + borderWidth/2}
+               Q${borderWidth/2},${boxHeight - borderWidth/2} ${borderWidth/2},${boxHeight - borderRadius - borderWidth/2}
+               V${borderRadius + borderWidth/2}
+               Q${borderWidth/2},${borderWidth/2} ${borderRadius + borderWidth/2},${borderWidth/2}
+               Z"
+            fill="${bgColor}"
+            stroke="white"
+            stroke-width="${borderWidth}"
+            stroke-linejoin="round"
+            filter="url(#pin-shadow)"
+          />
+          <!-- Score text - SF Pro style -->
+          <text 
+            x="${width / 2}" 
+            y="${boxHeight / 2}" 
+            font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', system-ui, sans-serif" 
+            font-size="${fontSize}" 
+            font-weight="600" 
+            fill="${textColor}" 
+            text-anchor="middle" 
+            dominant-baseline="central"
+            letter-spacing="-0.02em"
+          >${displayText}</text>
+        </g>
       </svg>
     `)}`,
-    scaledSize: new google.maps.Size(size, size),
-    anchor: new google.maps.Point(size / 2, size / 2),
+    scaledSize: new google.maps.Size(width, totalHeight),
+    anchor: new google.maps.Point(width / 2, totalHeight), // Anchor at arrow tip
   }
 }
 
@@ -833,17 +1162,29 @@ function ParkingLotPopup({
     if (score === null || score === undefined) {
       return { bg: 'bg-muted', text: 'text-muted-foreground' }
     }
-    // Inverted logic: Low score (bad condition) = Green (opportunity!)
-    if (score <= 30) return { bg: 'bg-emerald-100 dark:bg-emerald-950', text: 'text-emerald-700 dark:text-emerald-400' }
-    if (score <= 50) return { bg: 'bg-lime-100 dark:bg-lime-950', text: 'text-lime-700 dark:text-lime-400' }
-    if (score <= 70) return { bg: 'bg-amber-100 dark:bg-amber-950', text: 'text-amber-700 dark:text-amber-400' }
-    // High score (good condition) = Red/Muted (not interesting)
+    // High score = green (good condition), low score = red (needs work)
+    if (score >= 80) return { bg: 'bg-emerald-100 dark:bg-emerald-950', text: 'text-emerald-700 dark:text-emerald-400' }
+    if (score >= 60) return { bg: 'bg-green-100 dark:bg-green-950', text: 'text-green-700 dark:text-green-400' }
+    if (score >= 40) return { bg: 'bg-amber-100 dark:bg-amber-950', text: 'text-amber-700 dark:text-amber-400' }
+    // Low score (needs attention)
     return { bg: 'bg-red-100 dark:bg-red-950', text: 'text-red-700 dark:text-red-400' }
   }
 
   const hasBusiness = deal.has_business || deal.business
+  const hasContact = deal.has_contact || deal.contact_email || deal.contact_phone
   const isLead = deal.score !== null && deal.score !== undefined && deal.score < 50
-  const scoreStyle = getScoreColor(deal.score)
+  const leadScore = deal.lead_score ?? deal.score
+  const scoreStyle = getScoreColor(leadScore)
+
+  // Display name priority: business > contact company > address
+  const displayName = deal.display_name || deal.business?.name || deal.business_name || deal.contact_company || deal.address || 'Property'
+  const showAddress = deal.address && displayName !== deal.address
+
+  // Format property category for display
+  const formatCategory = (cat?: string) => {
+    if (!cat) return null
+    return cat.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+  }
 
   return (
     <div className="w-72 bg-card border border-border rounded-lg shadow-xl overflow-hidden">
@@ -879,12 +1220,12 @@ function ParkingLotPopup({
           </div>
         )}
         {/* Score badge overlay */}
-        {deal.score !== null && deal.score !== undefined && (
+        {leadScore !== null && leadScore !== undefined && (
           <div className={cn(
             'absolute top-2 left-2 px-2 py-1 rounded text-xs font-bold shadow-lg',
             scoreStyle.bg, scoreStyle.text
           )}>
-            {Math.round(deal.score)}/100
+            {Math.round(leadScore)}/100
           </div>
         )}
       </div>
@@ -894,22 +1235,24 @@ function ParkingLotPopup({
         {/* Title & Address */}
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-foreground truncate mb-0.5">
-            {deal.business?.name || deal.business_name || 'Unknown Location'}
+            {displayName}
           </h3>
-          <div className="flex items-start gap-1 text-xs text-muted-foreground">
-            <MapPin className="h-3 w-3 flex-shrink-0 mt-0.5" />
-            <span className="line-clamp-2">{deal.address}</span>
-          </div>
+          {showAddress && (
+            <div className="flex items-start gap-1 text-xs text-muted-foreground">
+              <MapPin className="h-3 w-3 flex-shrink-0 mt-0.5" />
+              <span className="line-clamp-2">{deal.address}</span>
+            </div>
+          )}
         </div>
 
         {/* Tags */}
         <div className="flex items-center gap-1 flex-wrap">
           {/* Status */}
           <StatusChip 
-            status={deal.status === 'evaluated' ? 'success' : deal.status === 'evaluating' ? 'info' : 'warning'}
-            icon={deal.status === 'evaluated' ? CheckCircle2 : Clock}
+            status={deal.status === 'evaluated' || deal.status === 'analyzed' ? 'success' : deal.status === 'evaluating' ? 'info' : 'warning'}
+            icon={deal.status === 'evaluated' || deal.status === 'analyzed' ? CheckCircle2 : Clock}
           >
-            {deal.status === 'evaluated' ? 'Analyzed' : deal.status === 'evaluating' ? 'Evaluating' : 'Pending'}
+            {deal.status === 'evaluated' || deal.status === 'analyzed' ? 'Analyzed' : deal.status === 'evaluating' ? 'Evaluating' : 'Pending'}
           </StatusChip>
 
           {/* Lead indicator */}
@@ -917,8 +1260,15 @@ function ParkingLotPopup({
             <StatusChip status="success" icon={Target}>Lead</StatusChip>
           )}
 
+          {/* Property category (for Regrid-first) */}
+          {deal.property_category && !hasBusiness && (
+            <StatusChip status="neutral" icon={Building2}>
+              {formatCategory(deal.property_category)}
+            </StatusChip>
+          )}
+
           {/* Business info */}
-          {hasBusiness ? (
+          {hasBusiness && (
             <>
               <StatusChip status="neutral" icon={Building2}>
                 {deal.business?.category || 'Business'}
@@ -926,8 +1276,14 @@ function ParkingLotPopup({
               {deal.business?.phone && <IconChip icon={Phone} tooltip="Has phone" />}
               {deal.business?.website && <IconChip icon={Globe} tooltip="Has website" />}
             </>
-          ) : (
-            <StatusChip status="warning" icon={AlertTriangle}>No business</StatusChip>
+          )}
+
+          {/* Contact info (for enriched Regrid properties) */}
+          {hasContact && !hasBusiness && (
+            <>
+              {deal.contact_phone && <IconChip icon={Phone} tooltip="Has phone" />}
+              {deal.contact_email && <IconChip icon={Globe} tooltip="Has email" />}
+            </>
           )}
         </div>
 

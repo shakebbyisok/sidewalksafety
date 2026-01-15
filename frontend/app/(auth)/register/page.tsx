@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import Link from 'next/link'
 import Image from 'next/image'
-import { Eye, EyeOff, ArrowRight, ArrowLeft, Building2, Zap, Target } from 'lucide-react'
+import { Eye, EyeOff, ArrowRight, ArrowLeft, Check } from 'lucide-react'
 
 export default function RegisterPage() {
   const [email, setEmail] = useState('')
@@ -29,226 +29,254 @@ export default function RegisterPage() {
 
   return (
     <div className="relative flex min-h-screen">
-      {/* Left Side - Brand Panel with Gradient */}
+      {/* Left Side - Clean Professional Design */}
       <div 
         className="hidden lg:flex lg:w-1/2 relative overflow-hidden"
         style={{
-          background: `linear-gradient(135deg, #EA580C 0%, #F97316 50%, #FB923C 100%)`
+          background: `#0A0F1C`
         }}
       >
-        {/* Overlay pattern */}
-        <div className="absolute inset-0 opacity-10">
+        {/* Subtle grid pattern */}
+        <div className="absolute inset-0 opacity-[0.03]">
           <div className="absolute inset-0" style={{
-            backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23000000' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+            backgroundImage: `
+              linear-gradient(rgba(123, 180, 50, 0.5) 1px, transparent 1px),
+              linear-gradient(90deg, rgba(123, 180, 50, 0.5) 1px, transparent 1px)
+            `,
+            backgroundSize: '60px 60px',
           }} />
         </div>
+
+        {/* Gradient orb top right */}
+        <div 
+          className="absolute -top-40 -right-40 w-[500px] h-[500px] rounded-full opacity-20 blur-[120px]"
+          style={{
+            background: 'radial-gradient(circle, #7BB432 0%, transparent 70%)'
+          }}
+        />
         
-        {/* Floating elements */}
-        <div className="absolute top-24 right-24 animate-float">
-          <div className="w-16 h-16 rounded-2xl bg-white/20 backdrop-blur-sm flex items-center justify-center">
-            <Building2 className="w-8 h-8 text-white" />
-          </div>
-        </div>
-        <div className="absolute top-48 left-24 animate-float" style={{ animationDelay: '1.5s' }}>
-          <div className="w-14 h-14 rounded-2xl bg-white/20 backdrop-blur-sm flex items-center justify-center">
-            <Zap className="w-7 h-7 text-white" />
-          </div>
-        </div>
-        <div className="absolute bottom-32 right-40 animate-float" style={{ animationDelay: '0.8s' }}>
-          <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-sm flex items-center justify-center">
-            <Target className="w-6 h-6 text-white" />
-          </div>
-        </div>
+        {/* Gradient orb bottom left */}
+        <div 
+          className="absolute -bottom-60 -left-40 w-[600px] h-[600px] rounded-full opacity-15 blur-[120px]"
+          style={{
+            background: 'radial-gradient(circle, #579130 0%, transparent 70%)'
+          }}
+        />
 
-        {/* Center Logo & Brand */}
-        <div className="relative z-10 flex flex-col items-center justify-center w-full px-12">
-          {/* Logo */}
-          <div className="mb-8 animate-slide-in-left">
-            <Image 
-              src="/sidewalksafety.svg" 
-              alt="Sidewalk Safety" 
-              width={280}
-              height={70}
-              className="drop-shadow-2xl"
-              priority
-            />
-          </div>
-          
-          {/* Tagline */}
-          <div className="text-center animate-slide-in-left" style={{ animationDelay: '100ms' }}>
-            <p className="text-2xl font-light text-white/90 mb-2">
-              Start Finding Leads Today
-            </p>
-            <p className="text-lg text-white/70">
-              Join hundreds of pavement companies
-            </p>
+        {/* Main content */}
+        <div className="relative z-10 flex flex-col justify-between w-full h-full p-12">
+          {/* Center - Hero content */}
+          <div className="flex-1 flex items-center justify-center pt-20">
+            <div className="w-full max-w-lg mx-auto text-center space-y-8">
+              {/* WorkSight Icon and Title */}
+              <div className="flex flex-col items-center gap-4 mb-12">
+                <Image 
+                  src="/brand/worksighticon.svg" 
+                  alt="WorkSight" 
+                  width={80}
+                  height={55}
+                  className="drop-shadow-lg"
+                  priority
+                />
+                <Image 
+                  src="/brand/worksighttitle.svg" 
+                  alt="WorkSight" 
+                  width={280}
+                  height={85}
+                  className="drop-shadow-lg"
+                  priority
+                />
+              </div>
+
+              {/* Main headline */}
+              <div className="space-y-4">
+                <h1 className="text-[2.75rem] leading-[1.1] font-semibold text-white tracking-tight">
+                  Start finding leads
+                  <span className="block text-[#7BB432]">in minutes</span>
+                </h1>
+                <p className="text-lg text-white/50 leading-relaxed max-w-md mx-auto">
+                  Join hundreds of landscape and property service 
+                  companies using AI to grow their business.
+                </p>
+              </div>
+
+              {/* Benefits list */}
+              <div className="space-y-4 pt-4 flex flex-col items-center">
+                {[
+                  { text: 'Free trial with 50 properties', highlight: true },
+                  { text: 'No credit card required', highlight: false },
+                  { text: 'Setup in under 2 minutes', highlight: false },
+                  { text: 'Cancel anytime', highlight: false }
+                ].map((item, i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <div className={`w-5 h-5 rounded-full flex items-center justify-center ${
+                      item.highlight ? 'bg-[#7BB432]' : 'bg-white/10'
+                    }`}>
+                      <Check className={`w-3 h-3 ${item.highlight ? 'text-white' : 'text-white/60'}`} />
+                    </div>
+                    <span className={`text-sm ${item.highlight ? 'text-white' : 'text-white/60'}`}>
+                      {item.text}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Testimonial */}
+              <div className="pt-8 border-t border-white/10 max-w-md mx-auto">
+                <p className="text-white/60 text-sm italic leading-relaxed">
+                  "WorkSight helped us identify $50K in new contracts within the first month. 
+                  The property analysis is incredibly accurate."
+                </p>
+                <div className="mt-4 flex items-center justify-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-white/70 text-sm font-medium">
+                    JM
+                  </div>
+                  <div className="text-left">
+                    <div className="text-white text-sm font-medium">James Mitchell</div>
+                    <div className="text-white/40 text-xs">CEO, Mitchell Landscaping</div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
-          {/* Benefits */}
-          <div className="mt-16 grid gap-4 animate-slide-in-left" style={{ animationDelay: '200ms' }}>
-            <div className="flex items-center gap-3 text-white/80">
-              <div className="w-2 h-2 rounded-full bg-white" />
-              <span>Free trial with 50 parking lots</span>
-            </div>
-            <div className="flex items-center gap-3 text-white/80">
-              <div className="w-2 h-2 rounded-full bg-white" />
-              <span>No credit card required</span>
-            </div>
-            <div className="flex items-center gap-3 text-white/80">
-              <div className="w-2 h-2 rounded-full bg-white" />
-              <span>Cancel anytime</span>
-            </div>
+          {/* Bottom - Footer */}
+          <div className="flex items-center justify-center text-sm text-white/30">
+            <span>© 2026 WorkSight</span>
           </div>
-        </div>
-
-        {/* Footer */}
-        <div className="absolute bottom-8 left-12 text-sm text-white/60">
-          © 2024 Sidewalk Safety. All rights reserved.
         </div>
       </div>
 
       {/* Right Side - Register Form */}
-      <div className="flex-1 flex items-center justify-center p-8 bg-background relative">
-        {/* Background gradient accent */}
-        <div className="absolute top-0 right-0 w-1/2 h-1/2 opacity-5 pointer-events-none"
-          style={{
-            background: 'radial-gradient(circle at top right, #F97316 0%, transparent 70%)'
-          }}
-        />
-
+      <div className="flex-1 flex items-center justify-center p-8 bg-white relative">
         <div className="w-full max-w-md space-y-6 animate-slide-in relative z-10">
           {/* Mobile Logo */}
-          <div className="lg:hidden flex justify-center mb-6">
+          <div className="lg:hidden flex items-center gap-3 mb-6">
             <Image 
-              src="/sidewalksafety.svg" 
-              alt="Sidewalk Safety" 
-              width={200}
-              height={50}
+              src="/brand/worksighticon.svg" 
+              alt="WorkSight" 
+              width={36}
+              height={25}
               priority
             />
+            <span className="text-foreground text-lg font-medium tracking-tight">WorkSight</span>
           </div>
 
           {/* Back to Login */}
           <Link 
             href="/login" 
-            className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
-            <ArrowLeft className="h-4 w-4" />
+            <ArrowLeft className="h-3.5 w-3.5" />
             Back to sign in
           </Link>
 
           {/* Header */}
           <div className="space-y-2">
-            <h1 className="text-3xl font-bold tracking-tight text-foreground">
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">
               Create your account
             </h1>
             <p className="text-muted-foreground">
-              Start discovering high-value parking lot leads
+              Start your free trial today
             </p>
           </div>
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-5">
-            <div className="space-y-4">
-              {/* Company Name */}
-              <div className="space-y-2">
-                <Label htmlFor="company" className="text-foreground font-medium">
-                  Company name
-                </Label>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Company Name */}
+            <div className="space-y-2">
+              <Label htmlFor="company" className="text-foreground text-sm font-medium">
+                Company name
+              </Label>
+              <Input
+                id="company"
+                type="text"
+                placeholder="Acme Landscaping"
+                autoComplete="organization"
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+                disabled={register.isPending}
+                required
+                className="h-11 bg-background border-border/60 focus:border-[#7BB432] focus:ring-[#7BB432]/20"
+              />
+            </div>
+
+            {/* Email */}
+            <div className="space-y-2">
+              <Label htmlFor="email" className="text-foreground text-sm font-medium">
+                Work email
+              </Label>
+              <Input
+                id="email"
+                type="email"
+                placeholder="name@company.com"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={register.isPending}
+                required
+                className="h-11 bg-background border-border/60 focus:border-[#7BB432] focus:ring-[#7BB432]/20"
+              />
+            </div>
+
+            {/* Password */}
+            <div className="space-y-2">
+              <Label htmlFor="password" className="text-foreground text-sm font-medium">
+                Password
+              </Label>
+              <div className="relative">
                 <Input
-                  id="company"
-                  type="text"
-                  placeholder="Acme Paving Co."
-                  autoComplete="organization"
-                  value={companyName}
-                  onChange={(e) => setCompanyName(e.target.value)}
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="Min. 8 characters"
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
                   disabled={register.isPending}
                   required
-                  className="h-12 text-base bg-background border-border focus:border-primary focus:ring-primary"
+                  className="h-11 pr-11 bg-background border-border/60 focus:border-[#7BB432] focus:ring-[#7BB432]/20"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/60 hover:text-foreground transition-colors"
+                  tabIndex={-1}
+                >
+                  {showPassword ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </button>
               </div>
+            </div>
 
-              {/* Email */}
-              <div className="space-y-2">
-                <Label htmlFor="email" className="text-foreground font-medium">
-                  Email address
-                </Label>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="you@company.com"
-                  autoComplete="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  disabled={register.isPending}
-                  required
-                  className="h-12 text-base bg-background border-border focus:border-primary focus:ring-primary"
-                />
-              </div>
-
-              {/* Password */}
-              <div className="space-y-2">
-                <Label htmlFor="password" className="text-foreground font-medium">
-                  Password
-                </Label>
-                <div className="relative">
-                  <Input
-                    id="password"
-                    type={showPassword ? 'text' : 'password'}
-                    placeholder="Create a strong password"
-                    autoComplete="new-password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    disabled={register.isPending}
-                    required
-                    className="h-12 text-base pr-12 bg-background border-border focus:border-primary focus:ring-primary"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                    tabIndex={-1}
-                  >
-                    {showPassword ? (
-                      <EyeOff className="h-5 w-5" />
-                    ) : (
-                      <Eye className="h-5 w-5" />
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              {/* Phone */}
-              <div className="space-y-2">
-                <Label htmlFor="phone" className="text-foreground font-medium">
-                  Phone number <span className="text-muted-foreground font-normal">(optional)</span>
-                </Label>
-                <Input
-                  id="phone"
-                  type="tel"
-                  placeholder="+1 (555) 000-0000"
-                  autoComplete="tel"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  disabled={register.isPending}
-                  className="h-12 text-base bg-background border-border focus:border-primary focus:ring-primary"
-                />
-              </div>
+            {/* Phone */}
+            <div className="space-y-2">
+              <Label htmlFor="phone" className="text-foreground text-sm font-medium">
+                Phone <span className="text-muted-foreground/60 font-normal">(optional)</span>
+              </Label>
+              <Input
+                id="phone"
+                type="tel"
+                placeholder="+1 (555) 000-0000"
+                autoComplete="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                disabled={register.isPending}
+                className="h-11 bg-background border-border/60 focus:border-[#7BB432] focus:ring-[#7BB432]/20"
+              />
             </div>
 
             {/* Submit Button */}
             <Button
               type="submit"
               disabled={register.isPending}
-              className="w-full h-12 text-base font-semibold text-white shadow-lg hover:shadow-xl transition-all duration-200"
-              style={{
-                background: `linear-gradient(135deg, #EA580C 0%, #F97316 100%)`,
-                boxShadow: '0 10px 25px -5px rgba(249, 115, 22, 0.3)',
-              }}
+              className="w-full h-11 font-medium text-white bg-[#579130] hover:bg-[#4a7a29] transition-colors mt-2"
             >
               {register.isPending ? (
                 <span className="flex items-center justify-center gap-2">
-                  <svg className="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                   </svg>
@@ -256,21 +284,21 @@ export default function RegisterPage() {
                 </span>
               ) : (
                 <span className="flex items-center justify-center gap-2">
-                  Create account
-                  <ArrowRight className="h-5 w-5" />
+                  Start free trial
+                  <ArrowRight className="h-4 w-4" />
                 </span>
               )}
             </Button>
           </form>
 
           {/* Footer */}
-          <p className="text-center text-xs text-muted-foreground pt-2">
+          <p className="text-center text-xs text-muted-foreground/60 pt-2">
             By creating an account, you agree to our{' '}
-            <button className="underline hover:text-foreground transition-colors">
-              Terms of Service
+            <button className="text-muted-foreground hover:text-foreground transition-colors">
+              Terms
             </button>{' '}
             and{' '}
-            <button className="underline hover:text-foreground transition-colors">
+            <button className="text-muted-foreground hover:text-foreground transition-colors">
               Privacy Policy
             </button>
           </p>

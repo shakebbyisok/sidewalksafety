@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Index
+from sqlalchemy import Column, String, DateTime, Integer, Numeric, Index, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -9,50 +9,42 @@ from app.db.base import Base
 
 
 class Business(Base):
+    """Business/tenant at a property - from Google Places."""
     __tablename__ = "businesses"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     
-    # Contact information
-    name = Column(String, nullable=False, index=True)
-    phone = Column(String, nullable=True)
-    email = Column(String, nullable=True)
-    website = Column(String, nullable=True)
+    # Google Places data
+    places_id = Column(String(255), unique=True, nullable=True)
+    name = Column(String(255), nullable=False)
+    address = Column(String(500), nullable=True)
+    location = Column(Geography(geometry_type='POINT', srid=4326), nullable=True)
     
-    # Address
-    address = Column(String, nullable=True)
-    city = Column(String, nullable=True, index=True)
-    state = Column(String, nullable=True, index=True)
-    zip = Column(String, nullable=True, index=True)
-    county = Column(String, nullable=True, index=True)
+    # Contact info
+    phone = Column(String(50), nullable=True)
+    email = Column(String(255), nullable=True)
+    website = Column(String(500), nullable=True)
     
-    # Category
-    category = Column(String, nullable=True, index=True)
-    subcategory = Column(String, nullable=True)
+    # Business details
+    category = Column(String(100), nullable=True)
+    business_type = Column(String(100), nullable=True)
+    rating = Column(Numeric(2, 1), nullable=True)
+    review_count = Column(Integer, nullable=True)
     
-    # Geometry (PostGIS)
-    geometry = Column(Geography(geometry_type='POINT', srid=4326), nullable=False)
-    building_polygon = Column(Geography(geometry_type='POLYGON', srid=4326), nullable=True)
+    # Raw data
+    raw_data = Column(JSONB, nullable=True)
     
-    # Data source IDs
-    infobel_id = Column(String, nullable=True, index=True)
-    safegraph_id = Column(String, nullable=True, index=True)
-    places_id = Column(String, nullable=True, index=True)
-    data_source = Column(String, nullable=False)  # "infobel", "safegraph", "google_places"
-    
-    # Metadata
-    raw_metadata = Column(JSONB, nullable=True)
+    # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     # Relationships
-    parking_lot_associations = relationship("ParkingLotBusinessAssociation", back_populates="business", cascade="all, delete-orphan")
+    properties = relationship("PropertyBusiness", back_populates="business", cascade="all, delete-orphan")
     deals = relationship("Deal", back_populates="business", cascade="all, delete-orphan")
-    property_analyses = relationship("PropertyAnalysis", back_populates="business")
 
     # Indexes
     __table_args__ = (
-        Index('idx_businesses_geometry', geometry, postgresql_using='gist'),
-        Index('idx_businesses_building', building_polygon, postgresql_using='gist'),
+        Index('idx_businesses_location', location, postgresql_using='gist'),
     )
 

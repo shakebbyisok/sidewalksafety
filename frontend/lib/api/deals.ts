@@ -35,12 +35,13 @@ export const dealsApi = {
     return results.map((lot: any) => ({
       id: lot.id,
       user_id: '',
-      business_name: lot.business?.name || lot.operator_name || 'Unknown',
+      business_name: lot.business?.name || lot.operator_name,
       address: lot.address || 'Unknown address',
       latitude: lot.centroid?.lat,
       longitude: lot.centroid?.lng,
-      status: lot.is_evaluated ? 'evaluated' : 'pending',
-      score: lot.condition_score,
+      status: lot.status || (lot.is_evaluated ? 'evaluated' : 'pending'),
+      score: lot.lead_score || lot.condition_score,
+      lead_score: lot.lead_score,
       satellite_url: lot.satellite_image_url,
       created_at: lot.created_at,
       // Business association data
@@ -58,7 +59,16 @@ export const dealsApi = {
       distance_meters: lot.distance_meters,
       // Business-first discovery fields
       business_type_tier: lot.business_type_tier,
-      discovery_mode: lot.discovery_mode,
+      discovery_source: lot.discovery_source,
+      // Regrid data
+      regrid_owner: lot.regrid_owner,
+      property_category: lot.property_category,
+      // Contact/enrichment data
+      contact_company: lot.contact?.company,
+      contact_phone: lot.contact?.phone,
+      contact_email: lot.contact?.email,
+      has_contact: !!(lot.contact?.email || lot.contact?.phone || lot.contact?.company),
+      enrichment_status: lot.contact?.status,
       // Analysis data
       paved_area_sqft: lot.paved_area_sqft,
       crack_count: lot.crack_count,
@@ -104,24 +114,40 @@ export const dealsApi = {
     
     // Transform GeoJSON to DealMapResponse format
     const features = data.features || []
-    return features.map((feature: any) => ({
-      id: feature.properties.id,
-      business_name: feature.properties.business_name || feature.properties.operator_name || 'Parking Lot',
-      address: feature.properties.address || '',
-      latitude: feature.geometry.coordinates[1],
-      longitude: feature.geometry.coordinates[0],
-      status: feature.properties.is_evaluated ? 'evaluated' : 'pending',
-      score: feature.properties.condition_score,
-      condition_score: feature.properties.condition_score,
-      satellite_url: feature.properties.satellite_image_url,
-      business_type_tier: feature.properties.business_type_tier,
-      has_business: feature.properties.has_business,
-      // Analysis data
-      paved_area_sqft: feature.properties.paved_area_sqft,
-      crack_count: feature.properties.crack_count,
-      pothole_count: feature.properties.pothole_count,
-      property_boundary_source: feature.properties.property_boundary_source,
-      lead_quality: feature.properties.lead_quality,
-    }))
+    return features.map((feature: any) => {
+      const props = feature.properties
+      return {
+        id: props.id,
+        business_name: props.business_name,
+        display_name: props.display_name,
+        address: props.address || '',
+        latitude: feature.geometry.coordinates[1],
+        longitude: feature.geometry.coordinates[0],
+        status: props.status || (props.is_evaluated ? 'evaluated' : 'pending'),
+        score: props.lead_score || props.condition_score,
+        lead_score: props.lead_score,
+        condition_score: props.condition_score,
+        satellite_url: props.satellite_image_url,
+        business_type_tier: props.business_type_tier,
+        has_business: props.has_business,
+        // Regrid data
+        regrid_owner: props.regrid_owner,
+        property_category: props.property_category,
+        // Contact/enrichment data
+        contact_company: props.contact_company,
+        contact_phone: props.contact_phone,
+        contact_email: props.contact_email,
+        has_contact: props.has_contact,
+        enrichment_status: props.enrichment_status,
+        // Discovery source
+        discovery_source: props.discovery_source,
+        // Analysis data
+        paved_area_sqft: props.paved_area_sqft,
+        crack_count: props.crack_count,
+        pothole_count: props.pothole_count,
+        property_boundary_source: props.property_boundary_source,
+        lead_quality: props.lead_quality,
+      }
+    })
   },
 }

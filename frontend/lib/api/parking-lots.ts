@@ -170,6 +170,22 @@ export interface ParkingLotDetail {
   match_score?: number
   distance_meters?: number
   property_analysis?: PropertyAnalysisSummary
+  contact?: ContactInfo
+  // Enrichment flow for UI
+  enrichment_steps?: string[]
+  enrichment_detailed_steps?: EnrichmentStep[]
+  enrichment_flow?: string
+}
+
+export interface EnrichmentStep {
+  action: string
+  description: string
+  output?: string
+  reasoning?: string
+  status: 'success' | 'failed' | 'skipped'
+  confidence?: number
+  url?: string  // Resource URL (search URL, website, etc.)
+  source?: string  // Source name (apartments.com, Google Places, etc.)
 }
 
 export interface ParkingLotBusiness {
@@ -194,6 +210,128 @@ export interface TileImageResponse {
   condition_image_base64?: string
 }
 
+export interface PropertyPreviewRequest {
+  lat: number
+  lng: number
+  address?: string
+  zoom?: number
+}
+
+export interface RegridLookupResponse {
+  has_parcel: boolean
+  location: { lat: number; lng: number }
+  parcel?: {
+    parcel_id?: string
+    address?: string
+    owner?: string
+    land_use?: string
+    zoning?: string
+    year_built?: string
+    area_acres?: number
+    area_sqm?: number
+    apn?: string
+  } | null
+  polygon_geojson?: GeoJSONPolygon | null
+  error?: string
+}
+
+export interface PropertyPreviewResponse {
+  success: boolean
+  saved: boolean
+  property_id: string
+  is_new: boolean
+  location: { lat: number; lng: number }
+  image_base64: string
+  image_size: { width: number; height: number }
+  area_sqm: number
+  area_sqft: number
+  polygon?: GeoJSONPolygon
+  regrid?: {
+    parcel_id?: string
+    apn?: string
+    address?: string
+    owner?: string
+    land_use?: string
+    zoning?: string
+    year_built?: string
+    area_acres?: number
+    area_sqm?: number
+  } | null
+  boundary_source?: string
+}
+
+export interface AnalyzePropertyRequest {
+  scoring_prompt_id?: string  // ID of saved prompt
+  custom_prompt?: string      // Or custom prompt text
+}
+
+export interface AnalyzePropertyResponse {
+  success: boolean
+  property_id: string
+  lead_score: number
+  lead_quality: string
+  confidence: number
+  reasoning: string
+  observations?: {
+    paved_area_pct?: number
+    building_pct?: number
+    landscaping_pct?: number
+    condition?: string
+    visible_issues?: string[]
+  } | null
+  usage?: {
+    tokens?: number
+    cost?: number
+  } | null
+}
+
+export interface ContactInfo {
+  name?: string
+  first_name?: string
+  last_name?: string
+  email?: string
+  phone?: string
+  title?: string
+  linkedin_url?: string
+  company?: string
+  company_website?: string
+  enriched_at?: string
+  source?: string
+  status?: string
+}
+
+// Enrichment process flow for UI display
+export interface EnrichmentInfo {
+  steps?: string[]           // ["Searched apartments.com", "Found Gables", "Got phone"]
+  flow?: string              // "Searched apartments.com → Found Gables → Got phone"
+}
+
+export interface EnrichPropertyResponse {
+  success: boolean
+  property_id: string
+  already_enriched?: boolean
+  property_type?: string
+  contact?: {
+    name?: string
+    first_name?: string
+    last_name?: string
+    email?: string
+    phone?: string
+    title?: string
+    linkedin_url?: string
+    company?: string
+    company_website?: string
+  }
+  // Enrichment process flow for UI
+  enrichment_steps?: string[]
+  enrichment_detailed_steps?: EnrichmentStep[]
+  enrichment_flow?: string
+  confidence?: number
+  tokens_used?: number
+  enriched_at?: string
+  error?: string
+}
+
 export const parkingLotsApi = {
   getParkingLot: async (id: string): Promise<ParkingLotDetail> => {
     const { data } = await apiClient.get<ParkingLotDetail>(`/parking-lots/${id}`)
@@ -209,6 +347,42 @@ export const parkingLotsApi = {
     const { data } = await apiClient.get<TileImageResponse>(`/parking-lots/tiles/${tileId}/image`)
     return data
   },
+
+  // Fast Regrid lookup - NO satellite imagery (~1 second)
+  regridLookup: async (lat: number, lng: number): Promise<RegridLookupResponse> => {
+    const { data } = await apiClient.get<RegridLookupResponse>(`/parking-lots/regrid-lookup`, {
+      params: { lat, lng },
+      timeout: 10000, // 10 seconds max
+    })
+    return data
+  },
+
+  // Full capture: Regrid + satellite imagery + save to DB
+  // Uses longer timeout since large properties can take 60+ seconds to process
+  captureProperty: async (request: PropertyPreviewRequest): Promise<PropertyPreviewResponse> => {
+    const { data } = await apiClient.post<PropertyPreviewResponse>(`/parking-lots/preview`, request, {
+      timeout: 180000, // 3 minutes for very large properties
+    })
+    return data
+  },
+
+  // Analyze property with VLM
+  analyzeProperty: async (propertyId: string, request: AnalyzePropertyRequest): Promise<AnalyzePropertyResponse> => {
+    const { data } = await apiClient.post<AnalyzePropertyResponse>(`/parking-lots/${propertyId}/analyze`, request, {
+      timeout: 60000, // 1 minute for VLM analysis
+    })
+    return data
+  },
+
+  // Enrich property with decision maker contact data via Apollo
+  enrichProperty: async (propertyId: string): Promise<EnrichPropertyResponse> => {
+    const { data } = await apiClient.post<EnrichPropertyResponse>(`/parking-lots/${propertyId}/enrich`, {}, {
+      timeout: 30000, // 30 seconds for enrichment
+    })
+    return data
+  },
 }
+
+
 
 

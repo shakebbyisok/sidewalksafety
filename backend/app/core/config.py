@@ -6,6 +6,7 @@ import secrets
 class Settings(BaseSettings):
     # Database (PostGIS required)
     DATABASE_URL: str
+    DB_SCHEMA: str = "worksightdev"  # Database schema (e.g., "worksightdev")
     
     # Parking Lot Data Sources
     # INRIX uses AppId + HashToken for authentication
@@ -48,6 +49,15 @@ class Settings(BaseSettings):
     # Replicate API (for Grounded SAM - high accuracy surface detection)
     # Get token from: https://replicate.com/account/api-tokens
     REPLICATE_API_TOKEN: Optional[str] = None
+    
+    # OpenRouter API (for Vision Language Models - GPT-4o, Claude, etc.)
+    # Get key from: https://openrouter.ai/keys
+    OPENROUTER_API_KEY: Optional[str] = None
+    
+    # Apollo.io API (for Lead Enrichment - find decision maker contacts)
+    # Get key from: https://app.apollo.io/settings/integrations/api
+    APOLLO_API_KEY: Optional[str] = None
+    
     
     # Image Storage
     CV_IMAGE_STORAGE_TYPE: str = "local"  # "local", "s3", "supabase"

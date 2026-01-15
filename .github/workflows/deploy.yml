@@ -1,0 +1,382 @@
+name: Deploy WorkSight to GCP VM
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # Allow manual triggers
+
+env:
+  DOMAIN: worksight.biz  # Change this to your domain
+  
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Build Frontend
+        working-directory: ./frontend
+        env:
+          NEXT_PUBLIC_BACKEND_URL: ${{ secrets.NEXT_PUBLIC_BACKEND_URL || 'https://api.worksight.biz' }}
+          NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: ${{ secrets.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Create deployment archive
+        run: |
+          mkdir -p deploy/frontend
+          cp -r backend deploy/
+          # Copy entire .next folder with all files
+          cp -r frontend/.next deploy/frontend-next
+          # Verify BUILD_ID exists
+          if [ ! -f "frontend/.next/BUILD_ID" ]; then
+            echo "❌ BUILD_ID missing - build may be incomplete"
+            exit 1
+          fi
+          cp frontend/package.json frontend/package-lock.json deploy/frontend/
+          cp frontend/next.config.js deploy/frontend/ 2>/dev/null || true
+          cp frontend/tsconfig.json deploy/frontend/ 2>/dev/null || true
+          cp frontend/tailwind.config.* deploy/frontend/ 2>/dev/null || true
+          cp frontend/postcss.config.js deploy/frontend/ 2>/dev/null || true
+          cp -r frontend/public deploy/frontend/ 2>/dev/null || true
+          # Copy setup script
+          cp .github/scripts/setup-vm.sh deploy/ 2>/dev/null || true
+          tar -czf deploy.tar.gz deploy/
+
+      - name: Deploy to GCP VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          port: ${{ secrets.VM_SSH_PORT || 22 }}
+          source: "deploy.tar.gz"
+          target: "/tmp/"
+
+      - name: Run deployment script on VM
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          port: ${{ secrets.VM_SSH_PORT || 22 }}
+          script: |
+            set -e
+            
+            DEPLOY_PATH="${{ secrets.VM_DEPLOY_PATH || '/home/${{ secrets.VM_USER }}/worksight' }}"
+            DOMAIN="${{ secrets.DOMAIN || 'worksight.biz' }}"
+            API_DOMAIN="api.${DOMAIN}"
+            
+            echo "📦 Starting deployment to $DEPLOY_PATH"
+            
+            # Create deploy path if it doesn't exist
+            mkdir -p "$DEPLOY_PATH"
+            cd "$DEPLOY_PATH"
+            
+            # Extract deployment
+            tar -xzf /tmp/deploy.tar.gz -C /tmp/
+            
+            # ============================================
+            # FIRST-TIME SETUP CHECK
+            # ============================================
+            if [ ! -f "$DEPLOY_PATH/.initialized" ]; then
+              echo "🔧 First-time setup detected. Running initialization..."
+              
+              # Install system dependencies
+              echo "📥 Installing system dependencies..."
+              sudo apt-get update
+              sudo apt-get install -y python3 python3-pip python3-venv nginx certbot python3-certbot-nginx curl
+              
+              # Install Node.js if not present
+              if ! command -v node &> /dev/null; then
+                echo "📥 Installing Node.js..."
+                curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+                sudo apt-get install -y nodejs
+              fi
+              
+              # Create directories
+              mkdir -p backend frontend
+              
+              # Create backend virtual environment
+              echo "🐍 Creating Python virtual environment..."
+              python3 -m venv backend/venv
+              
+              # Create systemd services
+              echo "⚙️ Creating systemd services..."
+              
+              # Backend service
+              sudo tee /etc/systemd/system/worksight-backend.service > /dev/null <<EOF
+            [Unit]
+            Description=WorkSight Backend API
+            After=network.target
+            
+            [Service]
+            Type=simple
+            User=${{ secrets.VM_USER }}
+            WorkingDirectory=$DEPLOY_PATH/backend
+            Environment="PATH=$DEPLOY_PATH/backend/venv/bin"
+            EnvironmentFile=$DEPLOY_PATH/backend/.env
+            ExecStart=$DEPLOY_PATH/backend/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+            Restart=always
+            RestartSec=10
+            
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+              
+              # Frontend service
+              sudo tee /etc/systemd/system/worksight-frontend.service > /dev/null <<EOF
+            [Unit]
+            Description=WorkSight Frontend
+            After=network.target
+            
+            [Service]
+            Type=simple
+            User=${{ secrets.VM_USER }}
+            WorkingDirectory=$DEPLOY_PATH/frontend
+            Environment="NODE_ENV=production"
+            Environment="PORT=3000"
+            ExecStart=/usr/bin/npm start
+            Restart=always
+            RestartSec=10
+            
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+              
+              # Reload systemd
+              sudo systemctl daemon-reload
+              
+              # Create nginx configuration
+              echo "🌐 Creating nginx configuration..."
+              sudo tee /etc/nginx/sites-available/worksight > /dev/null <<EOF
+            # Frontend
+            server {
+                listen 80;
+                server_name ${DOMAIN} www.${DOMAIN};
+                
+                location / {
+                    proxy_pass http://localhost:3000;
+                    proxy_http_version 1.1;
+                    proxy_set_header Upgrade \$http_upgrade;
+                    proxy_set_header Connection 'upgrade';
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto \$scheme;
+                    proxy_cache_bypass \$http_upgrade;
+                    proxy_read_timeout 86400;
+                }
+            }
+            
+            # Backend API
+            server {
+                listen 80;
+                server_name ${API_DOMAIN};
+                
+                client_max_body_size 50M;
+                
+                location / {
+                    proxy_pass http://localhost:8000;
+                    proxy_http_version 1.1;
+                    proxy_set_header Upgrade \$http_upgrade;
+                    proxy_set_header Connection 'upgrade';
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto \$scheme;
+                    proxy_cache_bypass \$http_upgrade;
+                    proxy_read_timeout 300;
+                }
+            }
+            EOF
+              
+              # Enable nginx site
+              sudo ln -sf /etc/nginx/sites-available/worksight /etc/nginx/sites-enabled/
+              sudo rm -f /etc/nginx/sites-enabled/default
+              sudo nginx -t && sudo systemctl restart nginx
+              
+              # Configure firewall
+              echo "🔥 Configuring firewall..."
+              sudo ufw allow 22/tcp
+              sudo ufw allow 80/tcp
+              sudo ufw allow 443/tcp
+              sudo ufw --force enable
+              
+              # Create .env template for backend
+              if [ ! -f "$DEPLOY_PATH/backend/.env" ]; then
+                echo "📝 Creating backend .env template..."
+                cat > "$DEPLOY_PATH/backend/.env" <<EOF
+            # Database (Supabase or PostgreSQL with PostGIS)
+            DATABASE_URL=postgresql://user:password@db.xxx.supabase.co:5432/postgres
+            DB_SCHEMA=worksightdev
+            
+            # Security
+            SECRET_KEY=change-this-to-a-secure-random-string
+            ENVIRONMENT=production
+            
+            # API Keys (add your keys here)
+            OPENROUTER_API_KEY=
+            GOOGLE_PLACES_KEY=
+            GOOGLE_MAPS_KEY=
+            REGRID_API_KEY=
+            APOLLO_API_KEY=
+            EOF
+                echo "⚠️ IMPORTANT: Edit $DEPLOY_PATH/backend/.env with your actual values!"
+              fi
+              
+              # Mark as initialized
+              touch "$DEPLOY_PATH/.initialized"
+              echo "✅ First-time setup completed!"
+            fi
+            
+            # ============================================
+            # DEPLOY BACKEND
+            # ============================================
+            echo "🚀 Deploying backend..."
+            
+            # Backup current backend (keep last 2)
+            find . -maxdepth 1 -type d -name "backend.backup.*" | sort -r | tail -n +3 | xargs rm -rf 2>/dev/null || true
+            
+            # Copy backend files (preserve .env and venv)
+            cp backend/.env /tmp/backend.env.backup 2>/dev/null || true
+            rsync -av --exclude='venv' --exclude='.env' --exclude='__pycache__' --exclude='*.pyc' /tmp/deploy/backend/ backend/
+            cp /tmp/backend.env.backup backend/.env 2>/dev/null || true
+            
+            # Install/update backend dependencies
+            echo "📦 Installing backend dependencies..."
+            source backend/venv/bin/activate
+            pip install -q --upgrade pip
+            pip install -q -r backend/requirements.txt
+            deactivate
+            
+            # ============================================
+            # DEPLOY FRONTEND
+            # ============================================
+            echo "🚀 Deploying frontend..."
+            
+            # Remove old .next and copy new one
+            if [ -d "frontend/.next" ]; then
+              mv frontend/.next frontend/.next.old.$(date +%s) || rm -rf frontend/.next
+            fi
+            cp -r /tmp/deploy/frontend-next frontend/.next
+            
+            # Verify BUILD_ID exists
+            if [ ! -f "frontend/.next/BUILD_ID" ]; then
+              echo "❌ BUILD_ID missing after copy"
+              exit 1
+            fi
+            
+            # Copy other frontend files
+            cp /tmp/deploy/frontend/package*.json frontend/
+            cp /tmp/deploy/frontend/next.config.js frontend/ 2>/dev/null || true
+            cp /tmp/deploy/frontend/tsconfig.json frontend/ 2>/dev/null || true
+            cp /tmp/deploy/frontend/tailwind.config.* frontend/ 2>/dev/null || true
+            cp /tmp/deploy/frontend/postcss.config.js frontend/ 2>/dev/null || true
+            cp -r /tmp/deploy/frontend/public frontend/ 2>/dev/null || true
+            
+            # Install frontend dependencies
+            echo "📦 Installing frontend dependencies..."
+            cd frontend
+            npm ci --production 2>/dev/null || npm install --production
+            cd ..
+            
+            # Clean up old .next backups (keep last 2)
+            find frontend -maxdepth 1 -type d -name ".next.old.*" | sort -r | tail -n +3 | xargs rm -rf 2>/dev/null || true
+            
+            # ============================================
+            # RESTART SERVICES
+            # ============================================
+            echo "🔄 Restarting services..."
+            
+            # Enable and restart backend
+            sudo systemctl enable worksight-backend
+            sudo systemctl restart worksight-backend
+            sleep 2
+            if sudo systemctl is-active --quiet worksight-backend; then
+              echo "✅ Backend is running"
+            else
+              echo "❌ Backend failed to start"
+              sudo journalctl -u worksight-backend -n 20 --no-pager
+            fi
+            
+            # Enable and restart frontend
+            sudo systemctl enable worksight-frontend
+            sudo systemctl restart worksight-frontend
+            sleep 3
+            if sudo systemctl is-active --quiet worksight-frontend; then
+              echo "✅ Frontend is running"
+            else
+              echo "❌ Frontend failed to start"
+              sudo journalctl -u worksight-frontend -n 20 --no-pager
+            fi
+            
+            # Reload nginx
+            sudo nginx -t && sudo systemctl reload nginx
+            
+            # ============================================
+            # VERIFY DEPLOYMENT
+            # ============================================
+            echo "🔍 Verifying deployment..."
+            sleep 5
+            
+            # Check frontend
+            if curl -sf http://localhost:3000 > /dev/null 2>&1; then
+              echo "✅ Frontend responding on localhost:3000"
+            else
+              echo "⚠️ Frontend not responding yet"
+            fi
+            
+            # Check backend
+            if curl -sf http://localhost:8000/docs > /dev/null 2>&1; then
+              echo "✅ Backend responding on localhost:8000"
+            else
+              echo "⚠️ Backend not responding - may need .env configuration"
+            fi
+            
+            # ============================================
+            # SSL SETUP (only on first run or if missing)
+            # ============================================
+            if [ ! -d "/etc/letsencrypt/live/${DOMAIN}" ]; then
+              echo "🔒 Setting up SSL certificates..."
+              sudo certbot --nginx -d ${DOMAIN} -d www.${DOMAIN} -d ${API_DOMAIN} --non-interactive --agree-tos --email ${{ secrets.SSL_EMAIL || 'admin@' }}${DOMAIN} || echo "⚠️ SSL setup failed - configure DNS first"
+            else
+              echo "🔒 SSL certificates already exist, attempting renewal..."
+              sudo certbot renew --quiet || true
+            fi
+            
+            # ============================================
+            # CLEANUP
+            # ============================================
+            rm -f /tmp/deploy.tar.gz
+            rm -rf /tmp/deploy
+            rm -f /tmp/backend.env.backup
+            
+            echo ""
+            echo "============================================"
+            echo "✅ DEPLOYMENT COMPLETED!"
+            echo "============================================"
+            echo "Frontend: https://${DOMAIN}"
+            echo "Backend:  https://${API_DOMAIN}"
+            echo ""
+            echo "⚠️ If this is the first deployment:"
+            echo "   1. Configure DNS A records for ${DOMAIN} and ${API_DOMAIN}"
+            echo "   2. Edit backend/.env with your API keys"
+            echo "   3. Run: sudo systemctl restart worksight-backend"
+            echo "============================================"

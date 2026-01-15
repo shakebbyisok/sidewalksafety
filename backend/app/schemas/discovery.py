@@ -13,8 +13,52 @@ class AreaType(str, Enum):
 
 class DiscoveryMode(str, Enum):
     """Discovery pipeline mode."""
-    BUSINESS_FIRST = "business_first"  # Find businesses → parking lots (recommended)
-    PARKING_FIRST = "parking_first"    # Find parking lots → businesses (legacy)
+    BUSINESS_FIRST = "business_first"  # Find businesses via Google Places → analyze property with Regrid + VLM
+    CONTACT_FIRST = "contact_first"  # Find contacts via Apollo → find their properties via Regrid → VLM scoring
+    REGRID_FIRST = "regrid_first"  # Query Regrid directly by LBCS codes → VLM scoring → Enrichment
+
+
+class PropertyCategoryEnum(str, Enum):
+    """Property categories for Regrid-first discovery (maps to LBCS codes)."""
+    MULTI_FAMILY = "multi_family"      # LBCS 1200-1299: Apartments, condos
+    RETAIL = "retail"                   # LBCS 2200-2599: Shopping, stores
+    OFFICE = "office"                   # LBCS 2100-2199: Office buildings
+    INDUSTRIAL = "industrial"           # LBCS 2600-2799: Warehouses
+    INSTITUTIONAL = "institutional"     # LBCS 3500, 4100-4299: Churches, schools, hospitals
+
+
+# LBCS code ranges for each property category
+# LBCS code ranges per category with the appropriate LBCS field
+# - lbcs_structure: Physical structure type (best for multi-family)
+# - lbcs_activity: What happens on property (best for commercial/retail)
+PROPERTY_CATEGORY_LBCS_CONFIG = {
+    PropertyCategoryEnum.MULTI_FAMILY: {
+        "field": "lbcs_structure",  # Structure codes for multi-family buildings
+        "ranges": [(1200, 1299)],
+    },
+    PropertyCategoryEnum.RETAIL: {
+        "field": "lbcs_activity",  # Activity codes for shopping/retail
+        "ranges": [(2200, 2299), (2500, 2599)],
+    },
+    PropertyCategoryEnum.OFFICE: {
+        "field": "lbcs_activity",  # Activity codes for office use
+        "ranges": [(2100, 2199)],
+    },
+    PropertyCategoryEnum.INDUSTRIAL: {
+        "field": "lbcs_activity",  # Activity codes for industrial/manufacturing
+        "ranges": [(2600, 2699), (2700, 2799)],
+    },
+    PropertyCategoryEnum.INSTITUTIONAL: {
+        "field": "lbcs_activity",  # Activity codes for institutional uses
+        "ranges": [(3500, 3599), (4100, 4199), (4200, 4299)],
+    },
+}
+
+# Backwards compatibility - just the ranges
+PROPERTY_CATEGORY_LBCS_RANGES = {
+    cat: config["ranges"] 
+    for cat, config in PROPERTY_CATEGORY_LBCS_CONFIG.items()
+}
 
 
 class BusinessTierEnum(str, Enum):
@@ -68,12 +112,12 @@ class DiscoveryFilters(BaseModel):
 class DiscoveryRequest(BaseModel):
     area_type: AreaType
     value: str = Field(..., description="ZIP code or county name")
-    state: Optional[str] = Field(None, description="Required if area_type is 'county'")
+    state: Optional[str] = Field(None, description="Required if area_type is 'county'. Also used for contact_first mode.")
     polygon: Optional[GeoJSONPolygon] = Field(None, description="Required if area_type is 'polygon'")
     filters: Optional[DiscoveryFilters] = None
     mode: DiscoveryMode = Field(
         default=DiscoveryMode.BUSINESS_FIRST,
-        description="Discovery mode: 'business_first' (recommended) finds businesses then parking lots, 'parking_first' finds parking lots then businesses"
+        description="Discovery mode: 'business_first' finds businesses via Google Places, 'contact_first' finds contacts via Apollo then their properties"
     )
     # Business type selection (for business_first mode)
     tiers: Optional[List[BusinessTierEnum]] = Field(
@@ -88,7 +132,42 @@ class DiscoveryRequest(BaseModel):
         default=10,
         ge=1,
         le=50,
-        description="Maximum number of businesses to discover (1-50). Default is 10."
+        description="Maximum number of results to discover (1-50). Default is 10."
+    )
+    scoring_prompt: Optional[str] = Field(
+        default=None,
+        max_length=2000,
+        description="Custom criteria for VLM lead scoring. If not provided, uses default pavement maintenance scoring."
+    )
+    
+    # ============ Contact-First Mode Parameters ============
+    city: Optional[str] = Field(
+        default=None,
+        description="City for contact search (contact_first mode). E.g., 'Dallas'"
+    )
+    job_titles: Optional[List[str]] = Field(
+        default=None,
+        description="Job titles to search in Apollo (contact_first mode). E.g., ['Owner', 'Principal', 'Asset Manager']. Defaults to property owner titles."
+    )
+    industries: Optional[List[str]] = Field(
+        default=None,
+        description="Industries to filter (contact_first mode). E.g., ['real estate', 'property management']. Defaults to real estate industries."
+    )
+    
+    # ============ Regrid-First Mode Parameters ============
+    property_categories: Optional[List[PropertyCategoryEnum]] = Field(
+        default=None,
+        description="Property categories to search in Regrid (regrid_first mode). E.g., ['multi_family', 'retail']. Maps to LBCS codes."
+    )
+    min_acres: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="Minimum parcel size in acres (regrid_first mode). E.g., 0.5 for half-acre minimum."
+    )
+    max_acres: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="Maximum parcel size in acres (regrid_first mode). E.g., 10 for ten-acre maximum."
     )
 
 
@@ -97,12 +176,22 @@ class DiscoveryRequest(BaseModel):
 class DiscoveryStep(str, Enum):
     QUEUED = "queued"
     CONVERTING_AREA = "converting_area"
+    # Business-first mode steps
     COLLECTING_PARKING_LOTS = "collecting_parking_lots"
     NORMALIZING = "normalizing"
     FETCHING_IMAGERY = "fetching_imagery"
     EVALUATING_CONDITION = "evaluating_condition"
     LOADING_BUSINESSES = "loading_businesses"
     ASSOCIATING = "associating"
+    # Contact-first mode steps
+    SEARCHING_CONTACTS = "searching_contacts"
+    SEARCHING_PROPERTIES = "searching_properties"
+    ANALYZING_PROPERTIES = "analyzing_properties"
+    # Regrid-first mode steps
+    QUERYING_REGRID = "querying_regrid"
+    PROCESSING_PARCELS = "processing_parcels"
+    ENRICHING_LEADS = "enriching_leads"
+    # Final steps
     FILTERING = "filtering"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -112,10 +201,18 @@ class DiscoveryProgress(BaseModel):
     current_step: DiscoveryStep
     steps_completed: int
     total_steps: int = 9
+    # Business-first mode metrics
     parking_lots_found: int = 0
     parking_lots_evaluated: int = 0
     businesses_loaded: int = 0
+    businesses_skipped: int = 0  # Already-processed businesses that were skipped
     associations_made: int = 0
+    # Contact-first mode metrics
+    contacts_found: int = 0
+    companies_searched: int = 0
+    properties_found: int = 0
+    properties_analyzed: int = 0
+    # Common metrics
     high_value_leads: int = 0
     errors: List[str] = []
 

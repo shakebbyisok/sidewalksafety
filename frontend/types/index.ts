@@ -21,7 +21,7 @@ export interface BusinessInfo {
 export interface Deal {
   id: string
   user_id: string
-  business_name: string
+  business_name?: string
   address: string
   city?: string
   state?: string
@@ -37,12 +37,24 @@ export interface Deal {
   apollo_id?: string
   status: DealStatus
   score?: number
+  lead_score?: number
   satellite_url?: string
   has_property_verified?: boolean
   property_verification_method?: string
   property_type?: string
   created_at: string
   updated_at?: string
+  // Regrid data
+  regrid_owner?: string
+  property_category?: string
+  // Contact/enrichment data
+  contact_company?: string
+  contact_phone?: string
+  contact_email?: string
+  has_contact?: boolean
+  enrichment_status?: 'success' | 'not_found' | 'error'
+  // Discovery source
+  discovery_source?: 'business_first' | 'regrid_first' | 'contact_first' | 'map_click'
   // Business association
   business?: BusinessInfo
   has_business: boolean
@@ -56,20 +68,22 @@ export interface Deal {
   lead_quality?: 'HIGH' | 'MEDIUM' | 'LOW'
   // Business-first discovery fields
   business_type_tier?: 'premium' | 'high' | 'standard'
-  discovery_mode?: 'business_first' | 'parking_first'
+  discovery_mode?: 'business_first' | 'parking_first' | 'contact_first'
 }
 
 export type DealStatus = 'pending' | 'evaluating' | 'evaluated' | 'archived'
 
 export interface DealMapResponse {
   id: string
-  business_name: string
+  business_name?: string
+  display_name?: string
   address: string
   latitude?: number
   longitude?: number
   status: DealStatus
   score?: number
   deal_score?: number
+  lead_score?: number
   estimated_job_value?: number
   damage_severity?: DamageSeverity
   satellite_url?: string
@@ -79,12 +93,22 @@ export interface DealMapResponse {
   business_type_tier?: 'premium' | 'high' | 'standard'
   business?: BusinessInfo
   has_business?: boolean
+  // Regrid data
+  regrid_owner?: string
+  property_category?: string
+  // Contact/enrichment data
+  contact_company?: string
+  contact_phone?: string
+  contact_email?: string
+  enrichment_status?: 'success' | 'not_found' | 'error'
+  has_contact?: boolean
   // Analysis data
   paved_area_sqft?: number
   crack_count?: number
   pothole_count?: number
   property_boundary_source?: 'regrid' | 'estimated'
-  lead_quality?: 'HIGH' | 'MEDIUM' | 'LOW'
+  lead_quality?: 'high' | 'medium' | 'low'
+  discovery_source?: 'business_first' | 'regrid_first' | 'contact_first' | 'map_click'
 }
 
 export type DamageSeverity = 'low' | 'medium' | 'high' | 'critical'
@@ -203,6 +227,10 @@ export interface DealWithEvaluation extends Deal {
   property_analysis?: PropertyAnalysisSummary
 }
 
+export type DiscoveryMode = 'business_first' | 'contact_first' | 'regrid_first'
+
+export type PropertyCategory = 'multi_family' | 'retail' | 'office' | 'industrial' | 'institutional'
+
 export interface GeographicSearchRequest {
   area_type: 'zip' | 'county'
   value: string
@@ -210,6 +238,17 @@ export interface GeographicSearchRequest {
   max_results?: number
   business_type_ids?: string[]
   tiers?: ('premium' | 'high' | 'standard')[]
+  scoring_prompt?: string
+  // Discovery mode
+  mode?: DiscoveryMode
+  // Contact-first mode parameters
+  city?: string
+  job_titles?: string[]
+  industries?: string[]
+  // Regrid-first mode parameters
+  property_categories?: PropertyCategory[]
+  min_acres?: number
+  max_acres?: number
 }
 
 export interface GeographicSearchResponse {
@@ -349,4 +388,3 @@ export interface PropertyAnalysisListResponse {
   offset: number
   results: PropertyAnalysis[]
 }
-

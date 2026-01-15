@@ -7,8 +7,8 @@ from app.core.config import settings
 from app.api.v1.router import api_router
 
 app = FastAPI(
-    title="Sidewalk Safety API",
-    description="Parking lot discovery and condition evaluation API for parking lot repair companies",
+    title="WorkSight API",
+    description="Property discovery, analysis, and lead enrichment API",
     version="2.0.0",
 )
 
@@ -20,9 +20,9 @@ def custom_openapi():
     from fastapi.openapi.utils import get_openapi
     
     openapi_schema = get_openapi(
-        title="Sidewalk Safety API",
+        title="WorkSight API",
         version="2.0.0",
-        description="Parking lot discovery and condition evaluation API",
+        description="Property discovery, analysis, and lead enrichment API",
         routes=app.routes,
     )
     
@@ -64,9 +64,9 @@ async def general_exception_handler(request: Request, exc: Exception):
 @app.get("/")
 def root():
     return {
-        "message": "Sidewalk Safety API",
+        "message": "WorkSight API",
         "version": "2.0.0",
-        "description": "Parking lot discovery and condition evaluation platform",
+        "description": "Property discovery, analysis, and lead enrichment platform",
     }
 
 

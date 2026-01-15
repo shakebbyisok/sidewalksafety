@@ -264,8 +264,12 @@ class BusinessFirstDiscoveryService:
         queries: List[str],
         max_results: int,
         seen_place_ids: set,
+        max_pages_per_query: int = 3,  # Google allows up to 3 pages (60 results)
     ) -> List[DiscoveredBusiness]:
-        """Search for businesses in a specific tier using provided queries."""
+        """
+        Search for businesses in a specific tier using provided queries.
+        Supports pagination to get more results.
+        """
         
         tier_businesses: List[DiscoveredBusiness] = []
         
@@ -274,31 +278,52 @@ class BusinessFirstDiscoveryService:
                 break
             
             try:
-                results = await self._text_search(
+                # First page
+                results, next_page_token = await self._text_search(
                     query=query,
                     center_lat=center_lat,
                     center_lng=center_lng,
                     radius_meters=radius_meters,
                 )
                 
-                for place in results:
-                    place_id = place.get("place_id")
-                    if not place_id or place_id in seen_place_ids:
-                        continue
+                pages_fetched = 1
+                
+                while True:
+                    for place in results:
+                        place_id = place.get("place_id")
+                        if not place_id or place_id in seen_place_ids:
+                            continue
+                        
+                        if len(tier_businesses) >= max_results:
+                            break
+                        
+                        # Get detailed info including phone/website
+                        business = await self._create_business_from_place(
+                            place=place,
+                            tier=tier,
+                            query=query,
+                        )
+                        
+                        if business:
+                            tier_businesses.append(business)
+                            seen_place_ids.add(place_id)
                     
+                    # Check if we have enough or need more
                     if len(tier_businesses) >= max_results:
                         break
                     
-                    # Get detailed info including phone/website
-                    business = await self._create_business_from_place(
-                        place=place,
-                        tier=tier,
-                        query=query,
-                    )
-                    
-                    if business:
-                        tier_businesses.append(business)
-                        seen_place_ids.add(place_id)
+                    # Fetch next page if available
+                    if next_page_token and pages_fetched < max_pages_per_query:
+                        results, next_page_token = await self._text_search(
+                            query=query,
+                            center_lat=center_lat,
+                            center_lng=center_lng,
+                            radius_meters=radius_meters,
+                            next_page_token=next_page_token,
+                        )
+                        pages_fetched += 1
+                    else:
+                        break
                         
             except Exception as e:
                 logger.warning(f"Error searching for '{query}': {e}")
@@ -311,33 +336,51 @@ class BusinessFirstDiscoveryService:
         center_lat: float,
         center_lng: float,
         radius_meters: int,
-    ) -> List[Dict[str, Any]]:
-        """Perform Google Places Text Search."""
+        next_page_token: Optional[str] = None,
+    ) -> tuple[List[Dict[str, Any]], Optional[str]]:
+        """
+        Perform Google Places Text Search.
+        
+        Returns:
+            Tuple of (results, next_page_token)
+            next_page_token is None if no more pages
+        """
+        import asyncio
         
         url = f"{self.base_url}/textsearch/json"
         
         params = {
-            "query": query,
-            "location": f"{center_lat},{center_lng}",
-            "radius": radius_meters,
             "key": self.google_places_key,
         }
+        
+        if next_page_token:
+            # When using pagetoken, no other params needed
+            params["pagetoken"] = next_page_token
+            # Google requires a short delay before using next_page_token
+            await asyncio.sleep(2)
+        else:
+            params["query"] = query
+            params["location"] = f"{center_lat},{center_lng}"
+            params["radius"] = radius_meters
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, params=params)
             
             if response.status_code != 200:
                 logger.error(f"Places API error: {response.status_code}")
-                return []
+                return [], None
             
             data = response.json()
             
             if data.get("status") != "OK":
                 if data.get("status") != "ZERO_RESULTS":
                     logger.warning(f"Places API status: {data.get('status')}")
-                return []
+                return [], None
             
-            return data.get("results", [])
+            results = data.get("results", [])
+            token = data.get("next_page_token")
+            
+            return results, token
     
     async def _get_place_details(self, place_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed place info including phone and website."""

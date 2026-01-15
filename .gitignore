@@ -1,0 +1,36 @@
+# Virtual environments
+samgeo_env/
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+keys.txt
+*.env
+.env.*
+!env.example
+
+# Test files
+test_*.py
+test_*.png
+
+# Debug output
+debug_images/
+
+# Build artifacts
+__pycache__/
+*.pyc
+*.pyo
+.next/
+node_modules/
+*.log

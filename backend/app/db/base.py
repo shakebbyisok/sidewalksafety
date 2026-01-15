@@ -1,9 +1,10 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 
 database_url = settings.DATABASE_URL
+db_schema = settings.DB_SCHEMA
 
 is_supabase_pooler = "pooler.supabase.com" in database_url or "supabase.co" in database_url
 
@@ -13,16 +14,20 @@ if is_supabase_pooler:
     elif "sslmode" not in database_url:
         database_url += "&sslmode=require"
 
-pool_config = {
-    "pool_pre_ping": True,
-    "echo": False,
-    "connect_args": {
+# Build connect_args with schema search_path
+connect_args = {
         "connect_timeout": 10,
         "keepalives": 1,
         "keepalives_idle": 30,
         "keepalives_interval": 10,
         "keepalives_count": 5,
+    "options": f"-csearch_path={db_schema},public",
     }
+
+pool_config = {
+    "pool_pre_ping": True,
+    "echo": False,
+    "connect_args": connect_args,
 }
 
 if is_supabase_pooler:
@@ -52,7 +57,11 @@ else:
 engine = create_engine(database_url, **pool_config)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+# Set schema in Base metadata so all models use it
 Base = declarative_base()
+Base.metadata.schema = db_schema if db_schema != "public" else None
+
+print(f"[DB] Schema: {db_schema}")
 
 
 def get_db():

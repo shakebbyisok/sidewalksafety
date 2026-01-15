@@ -58,15 +58,18 @@ export function useScrapeDeals() {
 
   return useMutation({
     mutationFn: (request: GeographicSearchRequest) => dealsApi.discover(request),
-    onSuccess: (data) => {
+    onSuccess: (data, variables) => {
       // Invalidate after a short delay to allow backend to process
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ['deals'] })
       }, 3000)
       
+      const isContactFirst = variables.mode === 'contact_first'
       toast({
-        title: 'Discovery Started',
-        description: `Job started. Parking lots will appear on the map as they are discovered.`,
+        title: isContactFirst ? 'Lead Discovery Started' : 'Property Discovery Started',
+        description: isContactFirst 
+          ? 'Finding decision-maker contacts and their properties...'
+          : 'Discovering properties. They will appear on the map as found.',
       })
     },
     onError: (error: any) => {

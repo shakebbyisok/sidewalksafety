@@ -31,21 +31,21 @@ export function Header() {
   }
 
   return (
-    <header className="sticky top-0 z-50 w-full h-12 bg-background border-b border-border">
+    <header className="sticky top-0 z-50 w-full h-14 bg-background border-b border-border">
       <div className="h-full flex items-center justify-between px-4">
         {/* Left: Logo + Nav */}
         <div className="flex items-center gap-6">
           {/* Logo */}
           <div 
-            className="flex items-center gap-2 cursor-pointer" 
+            className="flex items-center cursor-pointer" 
             onClick={() => router.push('/dashboard')}
           >
             <Image 
-              src="/sidewalksafety.svg" 
-              alt="SidewalkSafety" 
-              width={120}
-              height={24}
-              className="h-6 w-auto"
+              src="/brand/worksighticon.svg" 
+              alt="WorkSight" 
+              width={48}
+              height={33}
+              className="h-8 w-auto"
             />
           </div>
 
@@ -99,8 +99,7 @@ export function Header() {
                     <p className="text-xs text-muted-foreground truncate">{user.email}</p>
                   </div>
                   <div className="p-1">
-                    <DropdownItem icon={User} label="Profile" />
-                    <DropdownItem icon={Settings} label="Settings" />
+                    <DropdownItem icon={Settings} label="Settings" onClick={() => { setShowUserMenu(false); router.push('/settings') }} />
                   </div>
                   <div className="p-1 border-t border-border">
                     <DropdownItem icon={LogOut} label="Sign out" onClick={handleLogout} danger />

@@ -1,98 +1,159 @@
+"""
+Usage Tracking Service
+
+Tracks API usage for monitoring and quota management.
+
+BILLING MODELS:
+- OpenRouter: Per-token billing, returns actual cost in API response
+- Google Places: Per-request (~$17-32/1K) with $200 free credit/month
+- Regrid: Subscription-based with monthly API call quota (NOT per-call billing)
+- Google Satellite (contextily): FREE - uses raw tile server, not official API
+"""
+
 import logging
 from typing import Optional, Dict, Any
 from uuid import UUID
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from decimal import Decimal
 
 from app.models.usage_log import UsageLog
 
 logger = logging.getLogger(__name__)
 
 
-# Estimated costs per API call (in USD)
-COST_ESTIMATES = {
-    "inrix": 0.001,           # ~$1 per 1000 calls
-    "here": 0.0005,           # ~$0.50 per 1000 calls
-    "osm": 0.0,               # Free
-    "google_maps": 0.002,     # ~$2 per 1000 calls (Static Maps)
-    "google_places": 0.017,   # ~$17 per 1000 calls (Places Details)
-    "roboflow": 0.001,        # ~$1 per 1000 inferences (varies by plan)
+# Cost estimates and billing notes
+# These are for DISPLAY purposes - actual billing varies
+SERVICE_INFO = {
+    "openrouter": {
+        "billing": "per_token",
+        "note": "Actual cost returned by API",
+        "estimate_per_call": 0.0,  # We get actual cost
+    },
+    "google_places": {
+        "billing": "per_request",
+        "note": "$200 free credit/month, then ~$17-32/1K requests",
+        "estimate_per_call": 0.02,  # ~$20/1K average
+    },
+    "regrid": {
+        "billing": "subscription",
+        "note": "Plan-based quota, not per-call billing",
+        "estimate_per_call": 0.0,  # Included in subscription
+    },
+    "google_satellite": {
+        "billing": "free",
+        "note": "Raw tile server (contextily), not official Google API",
+        "estimate_per_call": 0.0,
+    },
+    "apollo": {
+        "billing": "per_credit",
+        "note": "Credits-based (~2-3 credits per enrichment)",
+        "estimate_per_call": 0.0,  # Credit usage tracked, not $ cost
+    },
 }
 
 
 class UsageTrackingService:
-    """Service to track and report API/compute usage per user."""
+    """Service to track API usage for monitoring and quota management."""
     
     def log_api_call(
         self,
         db: Session,
         user_id: UUID,
-        resource: str,
+        service: str,
+        operation: Optional[str] = None,
         job_id: Optional[UUID] = None,
-        count: int = 1,
+        property_id: Optional[UUID] = None,
+        api_calls: int = 1,
+        tokens_used: int = 0,
+        actual_cost: Optional[float] = None,  # For OpenRouter - actual cost from response
         metadata: Optional[Dict[str, Any]] = None
     ) -> UsageLog:
-        """Log an API call."""
-        estimated_cost = COST_ESTIMATES.get(resource, 0.001) * count
+        """
+        Log an API call for usage tracking.
+        
+        Args:
+            service: Service name (openrouter, google_places, regrid, google_satellite)
+            actual_cost: For OpenRouter, the actual cost returned by the API
+        """
+        # Get cost estimate based on service
+        service_info = SERVICE_INFO.get(service, {"estimate_per_call": 0})
+        
+        if actual_cost is not None:
+            # Use actual cost if provided (OpenRouter)
+            cost_estimate = actual_cost
+        elif service_info.get("billing") == "per_request":
+            # Estimate cost for per-request services
+            cost_estimate = service_info["estimate_per_call"] * api_calls
+        else:
+            # Free or subscription-based - no per-call cost
+            cost_estimate = 0.0
         
         log = UsageLog(
             user_id=user_id,
-            action="api_call",
-            resource=resource,
-            count=count,
-            estimated_cost=estimated_cost,
+            service=service,
+            operation=operation,
+            api_calls=api_calls,
+            tokens_used=tokens_used,
+            cost_estimate=Decimal(str(cost_estimate)) if cost_estimate else None,
             job_id=job_id,
-            details=metadata,
+            property_id=property_id,
+            extra_data=metadata,
         )
         
         db.add(log)
         db.commit()
         
-        logger.info(f"📊 [Usage] API call: {resource} x{count} (${estimated_cost:.4f}) user={user_id}")
+        # Log differently based on billing type
+        if actual_cost:
+            logger.info(f"[Usage] {service}: ${actual_cost:.4f} (actual) user={user_id}")
+        elif cost_estimate > 0:
+            logger.info(f"[Usage] {service} x{api_calls}: ~${cost_estimate:.4f} (est) user={user_id}")
+        else:
+            logger.info(f"[Usage] {service} x{api_calls} (quota/free) user={user_id}")
         
         return log
     
-    def log_cv_evaluation(
+    def log_openrouter_call(
         self,
         db: Session,
         user_id: UUID,
-        parking_lot_id: UUID,
+        model: str,
+        tokens_used: int,
+        actual_cost: float,
+        property_id: Optional[UUID] = None,
         job_id: Optional[UUID] = None,
-        bytes_processed: int = 0,
-        evaluation_time_seconds: float = 0,
-        detections: int = 0,
         metadata: Optional[Dict[str, Any]] = None
     ) -> UsageLog:
-        """Log a CV evaluation."""
-        # Roboflow cost estimate
-        estimated_cost = COST_ESTIMATES.get("roboflow", 0.001)
+        """
+        Log an OpenRouter VLM call with actual cost from API response.
         
+        OpenRouter returns usage info including cost directly in the response,
+        so we track the ACTUAL cost, not an estimate.
+        """
         log_metadata = {
-            "evaluation_time_seconds": evaluation_time_seconds,
-            "detections": detections,
+            "model": model,
             **(metadata or {}),
         }
         
         log = UsageLog(
             user_id=user_id,
-            action="cv_evaluation",
-            resource="roboflow",
-            count=1,
-            bytes_processed=bytes_processed,
-            estimated_cost=estimated_cost,
+            service="openrouter",
+            operation="vlm_analysis",
+            api_calls=1,
+            tokens_used=tokens_used,
+            cost_estimate=Decimal(str(actual_cost)),
             job_id=job_id,
-            parking_lot_id=parking_lot_id,
-            details=log_metadata,
+            property_id=property_id,
+            extra_data=log_metadata,
         )
         
         db.add(log)
         db.commit()
         
         logger.info(
-            f"📊 [Usage] CV evaluation: {bytes_processed/1024:.1f}KB, "
-            f"{detections} detections, {evaluation_time_seconds:.2f}s "
-            f"(${estimated_cost:.4f}) user={user_id}"
+            f"[Usage] OpenRouter {model}: {tokens_used} tokens, ${actual_cost:.6f} user={user_id}"
         )
         
         return log
@@ -102,46 +163,58 @@ class UsageTrackingService:
         db: Session,
         user_id: UUID,
         job_id: UUID,
-        parking_lots_found: int = 0,
-        parking_lots_evaluated: int = 0,
+        properties_found: int = 0,
+        properties_with_imagery: int = 0,
+        properties_analyzed: int = 0,
         businesses_loaded: int = 0,
+        vlm_total_cost: float = 0.0,  # Actual cost from OpenRouter
         metadata: Optional[Dict[str, Any]] = None
     ) -> UsageLog:
-        """Log a complete discovery job."""
-        # Estimate total cost for the job
-        estimated_cost = (
-            COST_ESTIMATES.get("inrix", 0) +  # 1 INRIX call
-            COST_ESTIMATES.get("here", 0) +   # 1 HERE call
-            COST_ESTIMATES.get("osm", 0) +    # 1 OSM call
-            (COST_ESTIMATES.get("google_maps", 0) * parking_lots_evaluated) +  # Image per lot
-            (COST_ESTIMATES.get("roboflow", 0) * parking_lots_evaluated) +     # CV per lot
-            (COST_ESTIMATES.get("google_places", 0) * businesses_loaded)       # Places per business
-        )
+        """
+        Log a complete discovery job summary.
+        
+        Cost breakdown:
+        - Regrid: Subscription (no per-call cost)
+        - Satellite: Free (raw tiles)
+        - Google Places: ~$0.02/call with $200 free credit
+        - VLM: Actual cost from OpenRouter
+        """
+        # Only Google Places has per-call cost estimate
+        places_cost_est = SERVICE_INFO["google_places"]["estimate_per_call"] * businesses_loaded
+        
+        # Total cost = Places estimate + actual VLM cost
+        total_cost = places_cost_est + vlm_total_cost
         
         log_metadata = {
-            "parking_lots_found": parking_lots_found,
-            "parking_lots_evaluated": parking_lots_evaluated,
+            "properties_found": properties_found,
+            "properties_with_imagery": properties_with_imagery,
+            "properties_analyzed": properties_analyzed,
             "businesses_loaded": businesses_loaded,
+            "cost_breakdown": {
+                "google_places_est": round(places_cost_est, 4),
+                "vlm_actual": round(vlm_total_cost, 4),
+                "regrid": "subscription (no per-call)",
+                "satellite": "free (raw tiles)",
+            },
             **(metadata or {}),
         }
         
         log = UsageLog(
             user_id=user_id,
-            action="discovery",
-            resource="discovery_pipeline",
-            count=1,
-            estimated_cost=estimated_cost,
+            service="discovery_pipeline",
+            operation="discovery_job",
+            api_calls=1,
+            cost_estimate=Decimal(str(total_cost)) if total_cost > 0 else None,
             job_id=job_id,
-            details=log_metadata,
+            extra_data=log_metadata,
         )
         
         db.add(log)
         db.commit()
         
         logger.info(
-            f"📊 [Usage] Discovery job completed: "
-            f"{parking_lots_found} lots, {parking_lots_evaluated} evaluated, "
-            f"{businesses_loaded} businesses (${estimated_cost:.4f}) user={user_id}"
+            f"[Usage] Discovery job: {properties_found} properties, {businesses_loaded} businesses, "
+            f"${total_cost:.4f} total (Places ~${places_cost_est:.4f} + VLM ${vlm_total_cost:.4f}) user={user_id}"
         )
         
         return log
@@ -161,41 +234,35 @@ class UsageTrackingService:
             UsageLog.created_at >= since
         ).all()
         
-        # Aggregate by action
-        by_action = {}
+        # Aggregate by service
+        by_service = {}
         for log in logs:
-            if log.action not in by_action:
-                by_action[log.action] = {
+            if log.service not in by_service:
+                by_service[log.service] = {
                     "count": 0,
-                    "total_cost": 0,
-                    "bytes_processed": 0,
+                    "total_cost": 0.0,
+                    "total_tokens": 0,
+                    "billing": SERVICE_INFO.get(log.service, {}).get("billing", "unknown"),
                 }
-            by_action[log.action]["count"] += log.count or 1
-            by_action[log.action]["total_cost"] += float(log.estimated_cost or 0)
-            by_action[log.action]["bytes_processed"] += log.bytes_processed or 0
+            by_service[log.service]["count"] += log.api_calls or 1
+            by_service[log.service]["total_cost"] += float(log.cost_estimate or 0)
+            by_service[log.service]["total_tokens"] += log.tokens_used or 0
         
-        # Aggregate by resource
-        by_resource = {}
-        for log in logs:
-            if log.resource and log.resource not in by_resource:
-                by_resource[log.resource] = {
-                    "count": 0,
-                    "total_cost": 0,
-                }
-            if log.resource:
-                by_resource[log.resource]["count"] += log.count or 1
-                by_resource[log.resource]["total_cost"] += float(log.estimated_cost or 0)
-        
-        total_cost = sum(float(log.estimated_cost or 0) for log in logs)
-        total_bytes = sum(log.bytes_processed or 0 for log in logs)
+        total_cost = sum(float(log.cost_estimate or 0) for log in logs)
+        total_tokens = sum(log.tokens_used or 0 for log in logs)
         
         return {
             "period_days": days,
             "total_requests": len(logs),
             "total_cost_usd": round(total_cost, 4),
-            "total_bytes_processed": total_bytes,
-            "by_action": by_action,
-            "by_resource": by_resource,
+            "total_tokens": total_tokens,
+            "by_service": by_service,
+            "billing_notes": {
+                "openrouter": "Actual cost (per-token)",
+                "google_places": "Estimated (~$200 free/month, then ~$20/1K)",
+                "regrid": "Subscription-based (quota only)",
+                "google_satellite": "Free (raw tile server)",
+            }
         }
     
     def get_daily_usage(
@@ -211,8 +278,8 @@ class UsageTrackingService:
         results = db.query(
             func.date(UsageLog.created_at).label("date"),
             func.count(UsageLog.id).label("request_count"),
-            func.sum(UsageLog.estimated_cost).label("total_cost"),
-            func.sum(UsageLog.bytes_processed).label("bytes_processed"),
+            func.sum(UsageLog.cost_estimate).label("total_cost"),
+            func.sum(UsageLog.tokens_used).label("total_tokens"),
         ).filter(
             UsageLog.user_id == user_id,
             UsageLog.created_at >= since
@@ -226,8 +293,8 @@ class UsageTrackingService:
             {
                 "date": str(r.date),
                 "request_count": r.request_count,
-                "total_cost_usd": float(r.total_cost or 0),
-                "bytes_processed": r.bytes_processed or 0,
+                "total_cost_usd": round(float(r.total_cost or 0), 4),
+                "total_tokens": r.total_tokens or 0,
             }
             for r in results
         ]
@@ -235,4 +302,3 @@ class UsageTrackingService:
 
 # Singleton instance
 usage_tracking_service = UsageTrackingService()
-

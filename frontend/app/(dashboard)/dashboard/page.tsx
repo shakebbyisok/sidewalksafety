@@ -4,10 +4,13 @@ import { useState, useCallback, useRef, useMemo, useEffect } from 'react'
 import { useDeals, useDealsForMap, useScrapeDeals, MapBounds } from '@/lib/queries/use-deals'
 import { InteractiveMap } from '@/components/map/interactive-map'
 import { DiscoveryCard } from '@/components/map/discovery-card'
-import { DealMapResponse } from '@/types'
+import { PropertyPreviewCard } from '@/components/map/property-preview-card'
+import { useDiscoveryStream } from '@/lib/hooks/use-discovery-stream'
+
+type ClickMode = 'property' | 'discovery'
+import { DealMapResponse, DiscoveryMode, PropertyCategory } from '@/types'
 import { useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
-import { Chip, ChipGroup, StatusChip } from '@/components/ui'
 import { 
   ChevronLeft,
   ChevronRight,
@@ -18,12 +21,11 @@ import {
   ExternalLink,
   Target,
   Layers,
-  AlertTriangle,
-  Circle,
   Square,
-  Zap,
-  ShieldCheck,
-  ShieldAlert
+  User,
+  Hash,
+  ArrowRight,
+  Gauge,
 } from 'lucide-react'
 
 type ScoreFilter = 'all' | 'lead' | 'critical' | 'poor' | 'fair' | 'good'
@@ -38,21 +40,23 @@ export default function DashboardPage() {
   const [selectedDeal, setSelectedDeal] = useState<DealMapResponse | null>(null)
   const [panelOpen, setPanelOpen] = useState(true)
   const [clickedLocation, setClickedLocation] = useState<{ lat: number; lng: number } | null>(null)
+  const [previewPolygon, setPreviewPolygon] = useState<any>(null)
+  const [clickMode, setClickMode] = useState<ClickMode>('property')
   
-  // Map bounds state with debouncing
   const [mapBounds, setMapBounds] = useState<MapBounds | undefined>(undefined)
   const boundsTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   const hasMapLoadedOnce = useRef(false)
   const scrapeDeals = useScrapeDeals()
+  
+  // Streaming discovery hook
+  const discoveryStream = useDiscoveryStream()
 
   const { data: dealsData, isLoading } = useDeals(statusFilter)
   const allDeals = Array.isArray(dealsData) ? dealsData : []
   
-  // Apply score filter
   const deals = useMemo(() => {
     let filtered = allDeals
-    
     if (scoreFilter === 'all') return filtered
     
     return filtered.filter(d => {
@@ -68,7 +72,6 @@ export default function DashboardPage() {
     })
   }, [allDeals, scoreFilter])
   
-  // Pass bounds to map query for PostGIS spatial filtering
   const { data: mapDealsData, isLoading: isLoadingMap } = useDealsForMap({ 
     status: statusFilter,
     ...mapBounds,
@@ -83,22 +86,23 @@ export default function DashboardPage() {
   const handleMapClick = useCallback((lat: number, lng: number) => {
     setSelectedDeal(null)
     setClickedLocation({ lat, lng })
+    setPreviewPolygon(null)
+    setClickMode('property')
   }, [])
 
-  // Debounced bounds change handler
+  const handlePolygonReady = useCallback((polygon: any) => {
+    setPreviewPolygon(polygon)
+  }, [])
+
   const handleBoundsChange = useCallback((bounds: { minLat: number; maxLat: number; minLng: number; maxLng: number }) => {
-    // Clear any pending timeout
     if (boundsTimeoutRef.current) {
       clearTimeout(boundsTimeoutRef.current)
     }
-    
-    // Set new timeout for debounced update
     boundsTimeoutRef.current = setTimeout(() => {
       setMapBounds(bounds)
     }, BOUNDS_DEBOUNCE_MS)
   }, [])
 
-  // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
       if (boundsTimeoutRef.current) {
@@ -107,13 +111,56 @@ export default function DashboardPage() {
     }
   }, [])
 
-  const handleDiscover = (type: 'zip' | 'county', value: string, state?: string, businessTypeIds?: string[], maxResults?: number) => {
-    scrapeDeals.mutate({
-      area_type: type, value,
-      state: type === 'county' ? state : undefined,
-      max_results: maxResults || (type === 'zip' ? 10 : 30),
-      business_type_ids: businessTypeIds,
-    }, { onSuccess: () => setClickedLocation(null) })
+  const handleDiscover = (params: {
+    type: 'zip' | 'county'
+    value: string
+    state?: string
+    businessTypeIds?: string[]
+    maxResults?: number
+    scoringPrompt?: string
+    mode?: DiscoveryMode
+    city?: string
+    jobTitles?: string[]
+    industries?: string[]
+    propertyCategories?: PropertyCategory[]
+    minAcres?: number
+    maxAcres?: number
+  }) => {
+    // Use streaming for regrid_first mode
+    if (params.mode === 'regrid_first') {
+      discoveryStream.startStream({
+        area_type: params.type,
+        value: params.value,
+        state: params.state,
+        max_results: params.maxResults || (params.type === 'zip' ? 10 : 30),
+        business_type_ids: params.businessTypeIds,
+        scoring_prompt: params.scoringPrompt,
+        mode: params.mode,
+        city: params.city,
+        job_titles: params.jobTitles,
+        industries: params.industries,
+        property_categories: params.propertyCategories,
+        min_acres: params.minAcres,
+        max_acres: params.maxAcres,
+      })
+    } else {
+      // Use regular mutation for other modes
+      scrapeDeals.mutate({
+        area_type: params.type, 
+        value: params.value,
+        state: params.state,
+        max_results: params.maxResults || (params.type === 'zip' ? 10 : 30),
+        business_type_ids: params.businessTypeIds,
+        scoring_prompt: params.scoringPrompt,
+        mode: params.mode,
+        city: params.city,
+        job_titles: params.jobTitles,
+        industries: params.industries,
+        property_categories: params.propertyCategories,
+        min_acres: params.minAcres,
+        max_acres: params.maxAcres,
+      }, { onSuccess: () => setClickedLocation(null) })
+    }
   }
 
   const counts = {
@@ -123,137 +170,76 @@ export default function DashboardPage() {
     leads: allDeals.filter(d => d.score !== null && d.score !== undefined && d.score < 50).length,
   }
 
-  // Helper to get score color (inverted: bad = green opportunity)
-  const getScoreColor = (score: number | null | undefined) => {
-    if (score === null || score === undefined) {
-      return { bg: 'bg-muted', text: 'text-muted-foreground' }
-    }
-    // Inverted logic: Low score (bad condition) = Green (opportunity!)
-    if (score <= 30) return { bg: 'bg-emerald-100 dark:bg-emerald-950', text: 'text-emerald-700 dark:text-emerald-400' }
-    if (score <= 50) return { bg: 'bg-lime-100 dark:bg-lime-950', text: 'text-lime-700 dark:text-lime-400' }
-    if (score <= 70) return { bg: 'bg-amber-100 dark:bg-amber-950', text: 'text-amber-700 dark:text-amber-400' }
-    // High score (good condition) = Red/Muted (not interesting)
-    return { bg: 'bg-red-100 dark:bg-red-950', text: 'text-red-700 dark:text-red-400' }
-  }
-
   return (
-    <div className="h-full flex">
+    <div className="h-full flex bg-stone-100">
       {/* Side Panel */}
       <div className={cn(
-        'h-full bg-card border-r border-border flex flex-col transition-all duration-200',
+        'h-full bg-stone-50 border-r border-stone-200 flex flex-col transition-all duration-200',
         panelOpen ? 'w-80' : 'w-0'
       )}>
         {panelOpen && (
           <>
             {/* Panel Header */}
-            <div className="flex-shrink-0 p-3 border-b border-border space-y-3">
-              <div className="flex items-center justify-between">
+            <div className="flex-shrink-0 px-3 py-3 border-b border-stone-200 bg-white">
+              <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
-                  <Layers className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-sm font-semibold">Parking Lots</span>
-                  <span className="text-xs text-muted-foreground">({counts.all})</span>
+                  <div className="w-6 h-6 rounded bg-stone-100 flex items-center justify-center">
+                    <Layers className="h-3.5 w-3.5 text-stone-500" />
+                  </div>
+                  <span className="text-sm font-semibold text-stone-800">Parcels</span>
+                  <span className="text-xs font-mono text-stone-400">{counts.all}</span>
                 </div>
                 <button 
                   onClick={() => setPanelOpen(false)}
-                  className="p-1 rounded hover:bg-muted transition-colors"
+                  className="p-1 rounded hover:bg-stone-100 transition-colors"
                 >
-                  <ChevronLeft className="h-4 w-4 text-muted-foreground" />
+                  <ChevronLeft className="h-4 w-4 text-stone-400" />
                 </button>
               </div>
 
-              {/* Status Filter Chips */}
-              <ChipGroup>
-                <Chip 
+              {/* Filter Chips */}
+              <div className="flex gap-1.5">
+                <FilterChip 
                   active={!statusFilter} 
                   onClick={() => setStatusFilter(undefined)}
                   count={counts.all}
-                  icon={Circle}
                 >
                   All
-                </Chip>
-                <Chip 
+                </FilterChip>
+                <FilterChip 
                   active={statusFilter === 'pending'} 
                   onClick={() => setStatusFilter('pending')}
                   count={counts.pending}
-                  icon={Clock}
                 >
                   Pending
-                </Chip>
-                <Chip 
+                </FilterChip>
+                <FilterChip 
                   active={statusFilter === 'evaluated'} 
                   onClick={() => setStatusFilter('evaluated')}
                   count={counts.analyzed}
-                  icon={CheckCircle2}
                 >
-                  Analyzed
-                </Chip>
-              </ChipGroup>
-
-              {/* Score Filter - Clickable Segmented Bar */}
-              <div className="pt-2 border-t border-border space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Condition</span>
-                  {scoreFilter !== 'all' && (
-                    <button 
-                      onClick={() => setScoreFilter('all')}
-                      className="text-[10px] text-muted-foreground hover:text-foreground"
-                    >
-                      Clear
-                    </button>
-                  )}
+                  Captured
+                </FilterChip>
                 </div>
                 
-                {/* Clickable Segmented Bar */}
-                <div className="flex h-6 rounded-md overflow-hidden border border-border">
-                  <SegmentButton 
-                    active={scoreFilter === 'critical'}
-                    onClick={() => setScoreFilter(scoreFilter === 'critical' ? 'all' : 'critical')}
-                    color="bg-emerald-500"
-                    label="Critical"
-                    flex={30}
-                  />
-                  <SegmentButton 
-                    active={scoreFilter === 'poor'}
-                    onClick={() => setScoreFilter(scoreFilter === 'poor' ? 'all' : 'poor')}
-                    color="bg-lime-500"
-                    label="Poor"
-                    flex={20}
-                  />
-                  <SegmentButton 
-                    active={scoreFilter === 'fair'}
-                    onClick={() => setScoreFilter(scoreFilter === 'fair' ? 'all' : 'fair')}
-                    color="bg-amber-500"
-                    label="Fair"
-                    flex={20}
-                  />
-                  <SegmentButton 
-                    active={scoreFilter === 'good'}
-                    onClick={() => setScoreFilter(scoreFilter === 'good' ? 'all' : 'good')}
-                    color="bg-red-400"
-                    label="Good"
-                    flex={30}
-                  />
-                </div>
-
-                {/* Lead Quick Filter */}
+              {/* Leads Quick Filter */}
                 {counts.leads > 0 && (
                   <button
                     onClick={() => setScoreFilter(scoreFilter === 'lead' ? 'all' : 'lead')}
                     className={cn(
-                      'w-full flex items-center justify-between px-2 py-1.5 rounded-md text-xs font-medium transition-all',
+                    'mt-2 w-full flex items-center justify-between px-2 py-1.5 rounded text-xs font-medium transition-all',
                       scoreFilter === 'lead'
-                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 ring-1 ring-emerald-500/30'
-                        : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
+                      ? 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-300'
+                      : 'bg-stone-100 text-stone-500 hover:bg-stone-200 hover:text-stone-700'
                     )}
                   >
                     <span className="flex items-center gap-1.5">
                       <Target className="h-3 w-3" />
-                      All Leads
+                    Leads
                     </span>
-                    <span className="tabular-nums">{counts.leads}</span>
+                  <span className="font-mono">{counts.leads}</span>
                   </button>
                 )}
-              </div>
             </div>
 
             {/* List */}
@@ -261,35 +247,33 @@ export default function DashboardPage() {
               {isLoading ? (
                 <div className="p-3 space-y-2">
                   {[...Array(5)].map((_, i) => (
-                    <div key={i} className="h-20 bg-muted/50 rounded-lg animate-pulse" />
+                    <div key={i} className="h-20 bg-stone-200/50 rounded-lg animate-pulse" />
                   ))}
                 </div>
               ) : deals.length > 0 ? (
-                <div className="divide-y divide-border">
+                <div className="p-2 space-y-2">
                   {deals.map((deal) => (
-                    <ParkingLotItem
+                    <ParcelItem
                       key={deal.id}
                       deal={deal}
                       isSelected={selectedDeal?.id === deal.id}
                       onClick={() => { setSelectedDeal(deal as any); setClickedLocation(null) }}
                       onViewDetails={() => handleViewDetails(deal.id)}
-                      getScoreColor={getScoreColor}
                     />
                   ))}
                 </div>
               ) : (
                 <div className="flex flex-col items-center justify-center h-full p-6 text-center">
-                  <div className="w-14 h-14 rounded-xl border-2 border-dashed border-border flex items-center justify-center mb-3">
-                    <MapPin className="h-6 w-6 text-muted-foreground/30" strokeWidth={1.5} />
+                  <div className="w-12 h-12 rounded-xl border-2 border-dashed border-stone-300 flex items-center justify-center mb-3">
+                    <MapPin className="h-5 w-5 text-stone-400" strokeWidth={1.5} />
                   </div>
-                  <p className="text-sm font-medium">No parking lots found</p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {scoreFilter !== 'all' ? 'Try adjusting filters' : 'Click on the map to discover'}
+                  <p className="text-sm font-medium text-stone-600">No parcels found</p>
+                  <p className="text-xs text-stone-400 mt-1">
+                    {scoreFilter !== 'all' ? 'Try adjusting filters' : 'Click on map to analyze'}
                   </p>
                 </div>
               )}
             </div>
-
           </>
         )}
       </div>
@@ -298,54 +282,77 @@ export default function DashboardPage() {
       {!panelOpen && (
         <button
           onClick={() => setPanelOpen(true)}
-          className="absolute top-16 left-0 z-20 h-8 px-1 bg-card border-y border-r border-border rounded-r-md hover:bg-muted transition-colors"
+          className="absolute top-16 left-0 z-20 h-8 px-1 bg-white border border-stone-200 rounded-r-md hover:bg-stone-50 transition-colors shadow-sm"
         >
-          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          <ChevronRight className="h-4 w-4 text-stone-500" />
         </button>
       )}
 
       {/* Map Area */}
       <div className="flex-1 relative">
         {showMapLoading ? (
-          <div className="h-full flex items-center justify-center bg-muted/30">
+          <div className="h-full flex items-center justify-center bg-stone-200/50">
             <div className="flex flex-col items-center gap-2">
-              <div className="h-6 w-6 border-2 border-muted-foreground/30 border-t-foreground rounded-full animate-spin" />
-              <span className="text-xs text-muted-foreground">Loading map...</span>
+              <div className="h-6 w-6 border-2 border-stone-300 border-t-stone-600 rounded-full animate-spin" />
+              <span className="text-xs text-stone-500">Loading map...</span>
             </div>
           </div>
         ) : (
           <InteractiveMap
             deals={mapDeals}
             selectedDeal={selectedDeal}
-            onDealSelect={(deal) => { setSelectedDeal(deal); setClickedLocation(null) }}
+            onDealSelect={(deal) => { setSelectedDeal(deal); setClickedLocation(null); setPreviewPolygon(null) }}
             onViewDetails={handleViewDetails}
             onBoundsChange={handleBoundsChange}
             onMapClick={handleMapClick}
             clickedLocation={clickedLocation}
+            previewPolygon={previewPolygon}
           />
         )}
 
-        {/* Discovery Card */}
+        {/* Property Preview or Discovery Card */}
         {clickedLocation && (
           <div className="absolute top-4 right-4 z-30">
+            {clickMode === 'property' ? (
+              <PropertyPreviewCard
+                lat={clickedLocation.lat}
+                lng={clickedLocation.lng}
+                onClose={() => {
+                  setClickedLocation(null)
+                  setPreviewPolygon(null)
+                  setClickMode('property')
+                }}
+                onPolygonReady={handlePolygonReady}
+                onDiscoverArea={() => setClickMode('discovery')}
+              />
+            ) : (
             <DiscoveryCard
               lat={clickedLocation.lat}
               lng={clickedLocation.lng}
               onDiscover={handleDiscover}
-              onClose={() => setClickedLocation(null)}
+              onClose={() => {
+                setClickedLocation(null)
+                setPreviewPolygon(null)
+                setClickMode('property')
+                discoveryStream.clearProgress()
+              }}
               isDiscovering={scrapeDeals.isPending}
+              isStreaming={discoveryStream.isStreaming}
+              streamProgress={discoveryStream.progress}
+              currentMessage={discoveryStream.currentMessage}
             />
+            )}
           </div>
         )}
 
-        {/* Map Legend - Inverted colors */}
+        {/* Map Legend */}
         <div className="absolute bottom-4 left-4 z-10">
-          <div className="flex items-center gap-3 px-3 py-2 bg-card/95 backdrop-blur-sm border border-border rounded-lg text-[11px] shadow-sm">
+          <div className="flex items-center gap-3 px-3 py-2 bg-white/95 backdrop-blur-sm border border-stone-200 rounded-lg text-[11px] shadow-sm">
             <LegendItem color="bg-emerald-500" label="Critical" />
             <LegendItem color="bg-lime-500" label="Poor" />
             <LegendItem color="bg-amber-500" label="Fair" />
             <LegendItem color="bg-red-400" label="Good" />
-            <LegendItem color="bg-muted-foreground" label="Pending" />
+            <LegendItem color="bg-stone-400" label="Pending" />
           </div>
         </div>
       </div>
@@ -355,136 +362,169 @@ export default function DashboardPage() {
 
 // Components
 
-function ParkingLotItem({ 
+function FilterChip({ 
+  active, 
+  onClick, 
+  count, 
+  children 
+}: { 
+  active: boolean
+  onClick: () => void
+  count: number
+  children: React.ReactNode 
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'px-2.5 py-1 rounded text-xs font-medium transition-all flex items-center gap-1.5',
+        active
+          ? 'bg-stone-800 text-white'
+          : 'bg-stone-100 text-stone-500 hover:bg-stone-200 hover:text-stone-700'
+      )}
+    >
+      {children}
+      <span className={cn(
+        'font-mono text-[10px]',
+        active ? 'text-stone-300' : 'text-stone-400'
+      )}>
+        {count}
+      </span>
+    </button>
+  )
+}
+
+function ParcelItem({ 
   deal, 
   isSelected, 
   onClick, 
   onViewDetails,
-  getScoreColor
 }: { 
   deal: any
   isSelected: boolean
   onClick: () => void
   onViewDetails: () => void
-  getScoreColor: (score: number | null | undefined) => { bg: string; text: string }
 }) {
   const hasBusiness = deal.has_business || deal.business
-  const isLead = deal.score !== null && deal.score !== undefined && deal.score < 50
-  const score = deal.score
-  const scoreStyle = getScoreColor(score)
-  
-  // Analysis data
+  const hasContact = deal.has_contact || deal.contact_email || deal.contact_phone
   const pavedArea = deal.paved_area_sqft
-  const crackCount = deal.crack_count
-  const potholeCount = deal.pothole_count
   const boundarySource = deal.property_boundary_source
-  const leadQuality = deal.lead_quality
+  const owner = deal.regrid_owner
+  const leadScore = deal.lead_score ?? deal.score
+  const isRegridFirst = deal.discovery_source === 'regrid_first'
 
-  // Format number with commas
+  // Display name priority: business > contact company > address
+  const displayName = deal.display_name || deal.business?.name || deal.business_name || deal.contact_company || deal.address || 'Property'
+  const subtitle = deal.address && displayName !== deal.address ? deal.address : null
+
   const formatNumber = (n: number | null | undefined) => {
     if (n === null || n === undefined) return '—'
     return n.toLocaleString()
   }
 
+  // Get score styling based on lead score (inverted - lower is better for leads)
+  const getScoreStyle = (score: number | null | undefined) => {
+    if (score === null || score === undefined) return null
+    if (score >= 70) return { bg: 'bg-emerald-500', text: 'text-white', label: 'High' }
+    if (score >= 40) return { bg: 'bg-amber-500', text: 'text-white', label: 'Medium' }
+    return { bg: 'bg-stone-400', text: 'text-white', label: 'Low' }
+  }
+
+  const scoreStyle = getScoreStyle(leadScore)
+
   return (
     <div
       onClick={onClick}
       className={cn(
-        'px-3 py-3 cursor-pointer transition-all group',
-        isSelected ? 'bg-muted' : 'hover:bg-muted/50',
-        isLead && !isSelected && 'border-l-2 border-l-emerald-500'
+        'bg-white rounded-lg border cursor-pointer transition-all group',
+        isSelected 
+          ? 'border-stone-400 shadow-md' 
+          : 'border-stone-200 hover:border-stone-300 hover:shadow-sm'
       )}
     >
-      <div className="flex items-start gap-3">
-        {/* Score Circle - Inverted colors */}
-        <div className={cn(
-          'w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 text-sm font-bold',
-          scoreStyle.bg,
-          scoreStyle.text
-        )}>
-          {score !== null && score !== undefined ? Math.round(score) : '—'}
-        </div>
-
-        <div className="flex-1 min-w-0">
-          {/* Title */}
-          <div className="flex items-center justify-between gap-2 mb-0.5">
-            <span className="text-sm font-medium truncate">
-              {deal.business?.name || deal.business_name || 'Unknown Location'}
-            </span>
+      <div className="p-3">
+        {/* Header with Lead Score */}
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-stone-800 truncate">
+              {displayName}
+            </p>
+            {subtitle && (
+              <p className="text-[11px] text-stone-400 truncate">{subtitle}</p>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            {/* Lead Score Badge */}
+            {scoreStyle && leadScore !== null && leadScore !== undefined && (
+              <div className={cn(
+                'flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold tabular-nums',
+                scoreStyle.bg, scoreStyle.text
+              )}>
+                <Gauge className="h-2.5 w-2.5" />
+                {Math.round(leadScore)}
+              </div>
+            )}
             <button 
               onClick={(e) => { e.stopPropagation(); onViewDetails() }}
-              className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-background transition-all flex-shrink-0"
+              className="p-1.5 rounded hover:bg-stone-100 transition-all opacity-0 group-hover:opacity-100"
             >
-              <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
+              <ArrowRight className="h-3.5 w-3.5 text-stone-400" />
             </button>
           </div>
+        </div>
 
-          {/* Address */}
-          <p className="text-xs text-muted-foreground truncate mb-1.5">{deal.address}</p>
-
-          {/* Metrics Row - NEW */}
-          {(pavedArea || crackCount !== undefined || potholeCount !== undefined) && (
-            <div className="flex items-center gap-3 mb-1.5 text-[10px]">
-              {pavedArea !== null && pavedArea !== undefined && (
-                <div className="flex items-center gap-1">
-                  <Square className="h-3 w-3 text-emerald-500" />
-                  <span className="text-muted-foreground">
-                    <span className="font-medium text-foreground">{formatNumber(Math.round(pavedArea))}</span> sqft
-                  </span>
-                </div>
-              )}
-              {crackCount !== null && crackCount !== undefined && crackCount > 0 && (
-                <div className="flex items-center gap-1">
-                  <Zap className="h-3 w-3 text-amber-500" />
-                  <span className="text-muted-foreground">
-                    <span className="font-medium text-foreground">{crackCount}</span> cracks
-                  </span>
-                </div>
-              )}
-              {potholeCount !== null && potholeCount !== undefined && potholeCount > 0 && (
-                <div className="flex items-center gap-1">
-                  <Circle className="h-3 w-3 text-red-500" />
-                  <span className="text-muted-foreground">
-                    <span className="font-medium text-foreground">{potholeCount}</span> potholes
-                  </span>
-                </div>
-              )}
+        {/* Stats Grid */}
+        <div className="grid grid-cols-2 gap-2 mb-2">
+          {pavedArea && (
+            <div className="flex items-center gap-1.5">
+              <Square className="h-3 w-3 text-stone-400" />
+              <span className="text-xs">
+                <span className="font-semibold text-stone-700 tabular-nums">{formatNumber(Math.round(pavedArea))}</span>
+                <span className="text-stone-400 ml-0.5">ft²</span>
+              </span>
             </div>
           )}
+          {owner && (
+            <div className="flex items-center gap-1.5 min-w-0">
+              <User className="h-3 w-3 text-stone-400 shrink-0" />
+              <span className="text-xs text-stone-600 truncate">{owner.length > 15 ? owner.split(' ')[0] : owner}</span>
+            </div>
+          )}
+        </div>
 
-          {/* Tags */}
-          <div className="flex items-center gap-1 flex-wrap">
-            {/* Lead Quality - NEW */}
-            {leadQuality === 'HIGH' && (
-              <StatusChip status="success" icon={Target}>High Lead</StatusChip>
-            )}
-            {leadQuality === 'MEDIUM' && (
-              <StatusChip status="info" icon={Target}>Med Lead</StatusChip>
-            )}
-
-            {/* Regrid verification - NEW */}
-            {boundarySource === 'regrid' && (
-              <StatusChip status="success" icon={ShieldCheck}>Regrid</StatusChip>
-            )}
-            {boundarySource === 'estimated' && (
-              <StatusChip status="warning" icon={ShieldAlert}>Est.</StatusChip>
-            )}
-
-            {/* Status */}
-            <StatusChip 
-              status={deal.status === 'evaluated' ? 'success' : deal.status === 'evaluating' ? 'info' : 'warning'}
-              icon={deal.status === 'evaluated' ? CheckCircle2 : Clock}
-            >
-              {deal.status}
-            </StatusChip>
-
-            {/* Business indicator */}
-            {hasBusiness ? (
-              <StatusChip status="info" icon={Building2}>Business</StatusChip>
+        {/* Tags */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {boundarySource === 'regrid' && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded text-[10px] font-medium">
+              <CheckCircle2 className="h-2.5 w-2.5" />
+              Regrid
+            </span>
+          )}
+          {hasBusiness && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber-50 text-amber-600 rounded text-[10px] font-medium">
+              <Building2 className="h-2.5 w-2.5" />
+              Business
+            </span>
+          )}
+          {hasContact && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded text-[10px] font-medium">
+              <User className="h-2.5 w-2.5" />
+              Contact
+            </span>
+          )}
+          <span className={cn(
+            'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium',
+            deal.status === 'evaluated' || deal.status === 'imagery_captured' || deal.status === 'analyzed'
+              ? 'bg-sky-50 text-sky-600'
+              : 'bg-stone-100 text-stone-500'
+          )}>
+            {deal.status === 'evaluated' || deal.status === 'imagery_captured' || deal.status === 'analyzed' ? (
+              <CheckCircle2 className="h-2.5 w-2.5" />
             ) : (
-              <StatusChip status="warning" icon={AlertTriangle}>No biz</StatusChip>
+              <Clock className="h-2.5 w-2.5" />
             )}
-          </div>
+            {deal.status === 'imagery_captured' ? 'Captured' : deal.status === 'analyzed' ? 'Analyzed' : deal.status}
+          </span>
         </div>
       </div>
     </div>
@@ -495,43 +535,7 @@ function LegendItem({ color, label }: { color: string; label: string }) {
   return (
     <div className="flex items-center gap-1.5">
       <div className={cn('w-2 h-2 rounded-full', color)} />
-      <span className="text-muted-foreground">{label}</span>
+      <span className="text-stone-500">{label}</span>
     </div>
-  )
-}
-
-function SegmentButton({ 
-  active, 
-  onClick, 
-  color, 
-  label,
-  flex
-}: { 
-  active: boolean
-  onClick: () => void
-  color: string
-  label: string
-  flex: number
-}) {
-  return (
-    <button
-      onClick={onClick}
-      style={{ flex }}
-      className={cn(
-        'relative text-[9px] font-medium transition-all border-r border-border last:border-r-0',
-        'flex items-center justify-center',
-        active 
-          ? 'text-white shadow-inner' 
-          : 'bg-muted/30 text-muted-foreground hover:bg-muted/60 hover:text-foreground'
-      )}
-    >
-      {/* Color fill when active */}
-      <div className={cn(
-        'absolute inset-0 transition-opacity',
-        color,
-        active ? 'opacity-100' : 'opacity-0'
-      )} />
-      <span className="relative z-10">{label}</span>
-    </button>
   )
 }

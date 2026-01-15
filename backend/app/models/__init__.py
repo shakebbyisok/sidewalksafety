@@ -1,23 +1,18 @@
+# Core models
 from app.models.user import User
-from app.models.parking_lot import ParkingLot
+from app.models.property import Property
 from app.models.business import Business
-from app.models.association import ParkingLotBusinessAssociation
+from app.models.property_business import PropertyBusiness
 from app.models.deal import Deal
 from app.models.usage_log import UsageLog
-from app.models.property_analysis import PropertyAnalysis
-from app.models.asphalt_area import AsphaltArea
-from app.models.cv_image import CVImage
-from app.models.analysis_tile import AnalysisTile
+from app.models.scoring_prompt import ScoringPrompt
 
 __all__ = [
     "User",
-    "ParkingLot",
+    "Property",
     "Business",
-    "ParkingLotBusinessAssociation",
+    "PropertyBusiness",
     "Deal",
     "UsageLog",
-    "PropertyAnalysis",
-    "AsphaltArea",
-    "CVImage",
-    "AnalysisTile",
+    "ScoringPrompt",
 ]

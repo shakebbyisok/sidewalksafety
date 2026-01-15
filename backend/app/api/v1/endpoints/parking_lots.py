@@ -28,6 +28,36 @@ from app.core.dependencies import get_current_user
 router = APIRouter()
 
 
+def _extract_asphalt_geojson(property_analysis):
+    """
+    Extract asphalt features from surfaces_geojson FeatureCollection.
+    
+    Returns a merged GeoJSON Feature if asphalt features exist, None otherwise.
+    """
+    surfaces_geojson = getattr(property_analysis, 'surfaces_geojson', None)
+    if not surfaces_geojson or not surfaces_geojson.get('features'):
+        return None
+    
+    # Filter for asphalt features
+    asphalt_features = [
+        f for f in surfaces_geojson['features']
+        if f.get('properties', {}).get('surface_type') in ('asphalt', 'road', 'paved', 'driveway', 'parking lot')
+    ]
+    
+    if not asphalt_features:
+        return None
+    
+    # If single feature, return it directly
+    if len(asphalt_features) == 1:
+        return asphalt_features[0]
+    
+    # If multiple features, return as FeatureCollection
+    return {
+        "type": "FeatureCollection",
+        "features": asphalt_features
+    }
+
+
 def parking_lot_to_response(lot: ParkingLot, include_business: bool = False) -> dict:
     """Convert ParkingLot model to response dict."""
     centroid = to_shape(lot.centroid)
@@ -55,6 +85,7 @@ def parking_lot_to_response(lot: ParkingLot, include_business: bool = False) -> 
         # Business-first discovery fields
         "business_type_tier": lot.business_type_tier,
         "discovery_mode": lot.discovery_mode,
+        "evaluation_status": lot.evaluation_status,
     }
     
     # Add geometry if available
@@ -63,6 +94,33 @@ def parking_lot_to_response(lot: ParkingLot, include_business: bool = False) -> 
         response["geometry"] = {
             "type": "Polygon",
             "coordinates": [list(geom.exterior.coords)]
+        }
+    
+    # Add Regrid property data
+    if lot.regrid_parcel_id:
+        regrid_polygon_geojson = None
+        if lot.regrid_polygon:
+            try:
+                regrid_geom = to_shape(lot.regrid_polygon)
+                if hasattr(regrid_geom, 'exterior'):
+                    regrid_polygon_geojson = {
+                        "type": "Polygon",
+                        "coordinates": [list(regrid_geom.exterior.coords)]
+                    }
+            except Exception:
+                pass
+        
+        response["regrid"] = {
+            "parcel_id": lot.regrid_parcel_id,
+            "apn": lot.regrid_apn,
+            "owner": lot.regrid_owner,
+            "owner_address": lot.regrid_owner_address,
+            "land_use": lot.regrid_land_use,
+            "zoning": lot.regrid_zoning,
+            "year_built": lot.regrid_year_built,
+            "area_acres": float(lot.regrid_area_acres) if lot.regrid_area_acres else None,
+            "polygon": regrid_polygon_geojson,
+            "fetched_at": lot.regrid_fetched_at,
         }
     
     return response
@@ -454,11 +512,14 @@ def get_parking_lot(
             "detection_method": getattr(property_analysis, 'detection_method', None) or "legacy_cv",
             
             # ============ SURFACE TYPE BREAKDOWN (NEW) ============
+            # Note: We use surfaces_geojson as the primary source for polygon data
+            # The individual geojson fields (asphalt_geojson, etc.) are for backwards compat
             "surfaces": {
                 "asphalt": {
-                    "area_m2": property_analysis.private_asphalt_area_m2,
-                    "area_sqft": property_analysis.private_asphalt_area_sqft,
-                    "geojson": getattr(property_analysis, 'private_asphalt_geojson', None),
+                    "area_m2": property_analysis.private_asphalt_area_m2 or getattr(property_analysis, 'total_paved_area_m2', None),
+                    "area_sqft": property_analysis.private_asphalt_area_sqft or getattr(property_analysis, 'total_paved_area_sqft', None),
+                    # Use surfaces_geojson features if private_asphalt_geojson is empty
+                    "geojson": getattr(property_analysis, 'private_asphalt_geojson', None) or _extract_asphalt_geojson(property_analysis),
                     "color": "#374151",  # Dark gray
                     "label": "Asphalt",
                 },
@@ -532,6 +593,55 @@ def get_parking_lot(
         import logging
         logger = logging.getLogger(__name__)
         logger.info(f"📸 No PropertyAnalysis found for {parking_lot_id}")
+        
+        # Fallback: Create property_analysis-like structure from ParkingLot's Regrid data
+        if lot.regrid_parcel_id:
+            logger.info(f"   📦 Using Regrid data from ParkingLot model")
+            
+            # Build property boundary from Regrid polygon
+            regrid_polygon_geojson = None
+            if lot.regrid_polygon:
+                try:
+                    regrid_geom = to_shape(lot.regrid_polygon)
+                    if hasattr(regrid_geom, 'exterior'):
+                        regrid_polygon_geojson = {
+                            "type": "Polygon",
+                            "coordinates": [list(regrid_geom.exterior.coords)]
+                        }
+                except Exception as e:
+                    logger.warning(f"   Failed to convert Regrid polygon: {e}")
+            
+            response["property_analysis"] = {
+                "id": None,
+                "status": lot.evaluation_status or "imagery_captured",
+                "analysis_type": "regrid_only",
+                "detection_method": None,
+                # Property boundary from Regrid
+                "property_boundary": {
+                    "source": "regrid",
+                    "parcel_id": lot.regrid_parcel_id,
+                    "owner": lot.regrid_owner,
+                    "apn": lot.regrid_apn,
+                    "land_use": lot.regrid_land_use,
+                    "zoning": lot.regrid_zoning,
+                    "polygon": regrid_polygon_geojson,
+                },
+                # Area from Regrid
+                "total_paved_area_sqft": float(lot.area_sqft) if lot.area_sqft else None,
+                "private_asphalt_area_sqft": float(lot.area_sqft) if lot.area_sqft else None,
+                # Satellite image
+                "images": {
+                    "wide_satellite": lot.satellite_image_base64,
+                },
+                "analyzed_at": lot.regrid_fetched_at.isoformat() if lot.regrid_fetched_at else None,
+                # Empty analysis fields (not yet analyzed)
+                "surfaces": None,
+                "surfaces_geojson": None,
+                "weighted_condition_score": None,
+                "total_crack_count": 0,
+                "total_pothole_count": 0,
+                "tiles": [],
+            }
     
     return ParkingLotDetailResponse(**response)
 
