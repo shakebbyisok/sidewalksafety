@@ -659,19 +659,19 @@ async def _process_parcel_stream(
         "message": f"Processing: {short_address}",
         "details": "Fetching property records"
     })
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(0.05)
     
     # Check if we need to fetch Regrid data
     if not prop.regrid_id or not prop.lbcs_structure:
         yield sse_message({
             "type": "regrid",
-            "message": "Querying Regrid for parcel data...",
+            "message": "Querying Regrid for parcel data",
         })
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.05)
         
         try:
             centroid = to_shape(prop.centroid)
-            parcel = await regrid_service.get_parcel_by_point(centroid.y, centroid.x)
+            parcel = await regrid_service.get_parcel_by_coordinates(centroid.y, centroid.x)
             
             if parcel:
                 # Store ALL Regrid fields (same as discovery flow)
@@ -712,13 +712,13 @@ async def _process_parcel_stream(
                     "message": f"Found: {parcel.owner or 'Unknown owner'}",
                     "details": f"LBCS: {parcel.lbcs_structure or 'N/A'}"
                 })
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.05)
             else:
                 yield sse_message({
                     "type": "regrid_warning",
                     "message": "No Regrid parcel found at location",
                 })
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.05)
                 
         except Exception as e:
             logger.error(f"[ProcessParcel] Regrid error: {e}")
@@ -732,16 +732,16 @@ async def _process_parcel_stream(
             "message": f"Using existing: {prop.regrid_owner or 'Unknown owner'}",
             "details": f"LBCS: {prop.lbcs_structure or 'N/A'}"
         })
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.05)
     
     # ============================================================
     # STEP 2: CLASSIFY PROPERTY - Using LBCS codes
     # ============================================================
     yield sse_message({
         "type": "classifying",
-        "message": "Classifying property type...",
+        "message": "Classifying property type",
     })
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(0.05)
     
     classification = classify_property(
         usecode=prop.regrid_land_use or "",
@@ -758,7 +758,7 @@ async def _process_parcel_stream(
         "message": f"Property type: {category_display}",
         "category": classification.value
     })
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(0.05)
     
     # ============================================================
     # STEP 3: SATELLITE IMAGERY
@@ -766,9 +766,9 @@ async def _process_parcel_stream(
     if not prop.satellite_image_base64:
         yield sse_message({
             "type": "imagery",
-            "message": "Capturing satellite view...",
+            "message": "Capturing satellite view",
         })
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.05)
         
         try:
             # Use polygon if available, otherwise centroid
@@ -800,13 +800,13 @@ async def _process_parcel_stream(
                     "message": "Satellite imagery captured",
                     "zoom": metadata.get("zoom_level")
                 })
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.05)
             else:
                 yield sse_message({
                     "type": "imagery_error",
                     "message": "Failed to capture imagery"
                 })
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.05)
                 
         except Exception as e:
             logger.error(f"[ProcessParcel] Imagery error: {e}")
@@ -819,7 +819,7 @@ async def _process_parcel_stream(
             "type": "imagery_complete",
             "message": "Using existing satellite imagery",
         })
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.05)
     
     # ============================================================
     # STEP 4: VLM ANALYSIS
@@ -827,9 +827,9 @@ async def _process_parcel_stream(
     if prop.satellite_image_base64:
         yield sse_message({
             "type": "analyzing",
-            "message": "AI analyzing property...",
+            "message": "AI analyzing property",
         })
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.05)
         
         try:
             property_context = {
@@ -877,7 +877,7 @@ async def _process_parcel_stream(
                     "score": score,
                     "reasoning": vlm_result.reasoning[:100] if vlm_result.reasoning else None
                 })
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.05)
             else:
                 yield sse_message({
                     "type": "analyzing_error",
@@ -897,10 +897,10 @@ async def _process_parcel_stream(
     if prop.lead_score is not None:
         yield sse_message({
             "type": "enriching",
-            "message": "Finding property manager...",
+            "message": "Finding property manager",
             "details": f"Strategy based on {category_display}"
         })
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.05)
         
         try:
             enrichment_result = await llm_enrichment_service.enrich(
@@ -944,7 +944,7 @@ async def _process_parcel_stream(
                     "company": enrichment_result.management_company,
                     "confidence": enrichment_result.confidence
                 })
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.05)
             else:
                 prop.enrichment_status = "not_found"
                 total_tokens += enrichment_result.tokens_used
@@ -954,7 +954,7 @@ async def _process_parcel_stream(
                     "message": "No contact info found",
                     "steps_taken": len(enrichment_result.detailed_steps) if enrichment_result.detailed_steps else 0
                 })
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.05)
                 
         except Exception as e:
             logger.error(f"[ProcessParcel] Enrichment error: {e}")

@@ -16,9 +16,9 @@ import {
   Phone,
   Mail,
   TrendingUp,
-  Pause
+  Radio,
 } from 'lucide-react'
-import { parkingLotsApi, RegridLookupResponse, PropertyPreviewResponse } from '@/lib/api/parking-lots'
+import { parkingLotsApi, RegridLookupResponse } from '@/lib/api/parking-lots'
 import { useRouter } from 'next/navigation'
 import { useQueryClient } from '@tanstack/react-query'
 import { useProcessParcelStream, ProcessParcelProgress } from '@/lib/hooks/use-process-parcel-stream'
@@ -33,29 +33,6 @@ interface PropertyPreviewCardProps {
 }
 
 type Phase = 'choice' | 'loading_regrid' | 'regrid_ready' | 'processing' | 'complete' | 'error' | 'no_parcel'
-
-// Map progress types to display info
-const PROGRESS_DISPLAY: Record<string, { icon: string; color: string }> = {
-  started: { icon: '▶', color: 'text-stone-500' },
-  regrid: { icon: '◎', color: 'text-amber-500' },
-  regrid_complete: { icon: '✓', color: 'text-emerald-500' },
-  regrid_warning: { icon: '!', color: 'text-amber-500' },
-  regrid_error: { icon: '✗', color: 'text-red-500' },
-  classifying: { icon: '◎', color: 'text-violet-500' },
-  classified: { icon: '✓', color: 'text-violet-500' },
-  imagery: { icon: '◎', color: 'text-sky-500' },
-  imagery_complete: { icon: '✓', color: 'text-sky-500' },
-  imagery_error: { icon: '✗', color: 'text-red-500' },
-  analyzing: { icon: '◎', color: 'text-orange-500' },
-  analyzing_error: { icon: '✗', color: 'text-red-500' },
-  scoring: { icon: '★', color: 'text-amber-500' },
-  enriching: { icon: '◎', color: 'text-emerald-500' },
-  enrichment_complete: { icon: '✓', color: 'text-stone-400' },
-  enrichment_error: { icon: '✗', color: 'text-red-500' },
-  contact_found: { icon: '✓', color: 'text-emerald-500' },
-  complete: { icon: '✓', color: 'text-emerald-500' },
-  error: { icon: '✗', color: 'text-red-500' },
-}
 
 export function PropertyPreviewCard({ lat, lng, onClose, onPolygonReady, onDiscoverArea }: PropertyPreviewCardProps) {
   const router = useRouter()
@@ -173,27 +150,84 @@ export function PropertyPreviewCard({ lat, lng, onClose, onPolygonReady, onDisco
   const fmt = (n: number | undefined | null, decimals = 0) => 
     n == null ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: decimals })
 
-  const renderProgressItem = (item: ProcessParcelProgress, index: number) => {
-    const display = PROGRESS_DISPLAY[item.type] || { icon: '•', color: 'text-stone-400' }
-    const isLatest = index === progress.length - 1
+  // Render a single progress item - matches discovery card style exactly
+  const renderProgressItem = (msg: ProcessParcelProgress, idx: number) => {
+    const isLatest = idx === progress.length - 1
+    const isComplete = msg.type === 'complete'
+    const isError = msg.type === 'error' || msg.type.endsWith('_error')
+    const isContactFound = msg.type === 'contact_found'
+    
+    // Get status indicator - same as discovery
+    const getStatusDot = () => {
+      if (isComplete) return <CheckCircle2 className="h-3 w-3 text-emerald-500 shrink-0" />
+      if (isError) return <X className="h-3 w-3 text-red-500 shrink-0" />
+      if (isContactFound) return <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0" />
+      if (isLatest && isProcessing) return <Loader2 className="h-3 w-3 animate-spin text-amber-500 shrink-0" />
+      return <span className="w-3 h-3 flex items-center justify-center text-stone-300 shrink-0">•</span>
+    }
     
     return (
       <div 
-        key={index} 
+        key={idx}
         className={cn(
-          'flex items-start gap-2 py-1',
-          isLatest && isProcessing && 'animate-pulse'
+          'flex items-start gap-2 px-2 py-1 rounded text-[11px]',
+          isComplete ? 'bg-emerald-50' :
+          isError ? 'bg-red-50' :
+          isContactFound ? 'bg-green-50' :
+          isLatest && isProcessing ? 'bg-amber-50' :
+          'bg-transparent'
         )}
       >
-        <span className={cn('font-mono text-xs w-4 text-center', display.color)}>
-          {display.icon}
-        </span>
-        <span className={cn(
-          'text-xs flex-1',
-          isLatest ? 'text-stone-700' : 'text-stone-500'
-        )}>
-          {item.message}
-        </span>
+        <span className="mt-0.5">{getStatusDot()}</span>
+        <div className="flex-1 min-w-0">
+          <span className={cn(
+            'block leading-tight',
+            isComplete ? 'text-emerald-700 font-medium' :
+            isError ? 'text-red-600' :
+            isContactFound ? 'text-green-700' :
+            isLatest && isProcessing ? 'text-stone-800' : 'text-stone-500'
+          )}>
+            {msg.message}
+          </span>
+          {msg.details && (
+            <span className="block text-[10px] text-stone-400">{msg.details}</span>
+          )}
+          {isContactFound && (msg.phone || msg.email) && (
+            <div className="flex flex-wrap gap-2 mt-0.5">
+              {msg.phone && (
+                <span className="inline-flex items-center gap-1 text-[10px] text-green-600">
+                  <Phone className="h-2.5 w-2.5" />
+                  {msg.phone}
+                </span>
+              )}
+              {msg.email && (
+                <span className="inline-flex items-center gap-1 text-[10px] text-green-600">
+                  <Mail className="h-2.5 w-2.5" />
+                  {msg.email}
+                </span>
+              )}
+            </div>
+          )}
+          {isComplete && msg.stats && (
+            <div className="flex flex-wrap gap-2 mt-1 text-[10px]">
+              {msg.stats.lead_score != null && (
+                <>
+                  <span className="text-amber-600 font-medium">Score: {msg.stats.lead_score}/100</span>
+                  <span className="text-stone-400">•</span>
+                </>
+              )}
+              <span className={msg.stats.has_contact ? 'text-emerald-600 font-medium' : 'text-stone-400'}>
+                {msg.stats.has_contact ? 'Contact found' : 'No contact'}
+              </span>
+              {msg.stats.duration && (
+                <>
+                  <span className="text-stone-400">•</span>
+                  <span className="text-stone-500">{msg.stats.duration}</span>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     )
   }
@@ -308,40 +342,59 @@ export function PropertyPreviewCard({ lat, lng, onClose, onPolygonReady, onDisco
           </div>
         )}
 
-        {/* ===== PROCESSING (Streaming) ===== */}
+        {/* ===== PROCESSING (Streaming) - Same style as discovery card ===== */}
         {phase === 'processing' && (
-          <div className="space-y-3">
-            {/* Address Header */}
-            {regridData?.parcel?.address && (
-              <div className="font-medium text-stone-900 truncate text-[13px]">
-                {regridData.parcel.address}
+          <div className="space-y-2">
+            {/* Header with live indicator - same as discovery */}
+            <div className="flex items-center justify-between px-2 py-1.5 bg-stone-100 border border-stone-200 rounded">
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Radio className="h-3.5 w-3.5 text-amber-600" />
+                  <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 bg-amber-500 rounded-full animate-pulse" />
+                </div>
+                <span className="text-[11px] font-medium text-stone-700">Processing parcel</span>
               </div>
-            )}
-            
-            {/* Stream Log */}
+            </div>
+
+            {/* Progress messages - fixed height scrollable - same as discovery */}
             <div 
               ref={streamLogRef}
-              className="bg-stone-900 rounded-lg p-2 h-40 overflow-y-auto scrollbar-thin scrollbar-thumb-stone-700 scrollbar-track-transparent"
+              className="h-44 overflow-y-auto border border-stone-200 rounded bg-white"
             >
               {progress.length === 0 ? (
                 <div className="flex items-center justify-center h-full">
-                  <Loader2 className="h-5 w-5 animate-spin text-stone-500" />
+                  <div className="flex flex-col items-center gap-2">
+                    <Loader2 className="h-5 w-5 animate-spin text-amber-500" />
+                    <span className="text-xs text-stone-500">Starting...</span>
+                  </div>
                 </div>
               ) : (
-                <div className="space-y-0.5">
-                  {progress.map((item, idx) => renderProgressItem(item, idx))}
+                <div className="p-1.5 space-y-1">
+                  {progress.map((msg, idx) => renderProgressItem(msg, idx))}
                 </div>
               )}
             </div>
 
-            {/* Stop Button */}
-            <button
-              onClick={stopProcessing}
-              className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-stone-200 hover:bg-stone-300 rounded text-xs transition-colors text-stone-600"
-            >
-              <Pause className="h-3 w-3" />
-              Cancel
-            </button>
+            {/* Cancel button when processing */}
+            {isProcessing && (
+              <button
+                onClick={stopProcessing}
+                className="w-full px-3 py-1.5 bg-stone-200 text-stone-600 rounded text-xs font-medium hover:bg-stone-300 transition-colors"
+              >
+                Cancel
+              </button>
+            )}
+
+            {/* View Details when complete */}
+            {!isProcessing && progress.some(m => m.type === 'complete') && (
+              <button
+                onClick={handleViewDetails}
+                className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-stone-800 hover:bg-stone-700 text-white rounded text-xs font-medium transition-colors"
+              >
+                View Details
+                <ArrowRight className="h-3 w-3" />
+              </button>
+            )}
           </div>
         )}
 

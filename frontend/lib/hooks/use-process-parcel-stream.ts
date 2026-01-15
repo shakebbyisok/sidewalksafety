@@ -99,6 +99,8 @@ export function useProcessParcelStream() {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`,
+            'Accept': 'text/event-stream',
+            'Cache-Control': 'no-cache',
           },
           body: JSON.stringify(body),
           signal: abortControllerRef.current.signal,
@@ -117,20 +119,30 @@ export function useProcessParcelStream() {
       const decoder = new TextDecoder()
       let buffer = ''
 
+      // Process stream in real-time
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
 
+        // Decode chunk and add to buffer
         buffer += decoder.decode(value, { stream: true })
         
-        // Parse SSE events
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || '' // Keep incomplete line in buffer
-
-        for (const line of lines) {
+        // Process all complete lines in the buffer
+        let newlineIndex
+        while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, newlineIndex).trim()
+          buffer = buffer.slice(newlineIndex + 1)
+          
+          // Skip empty lines
+          if (!line) continue
+          
+          // Parse SSE data line
           if (line.startsWith('data: ')) {
             try {
-              const data = JSON.parse(line.slice(6)) as ProcessParcelProgress
+              const jsonStr = line.slice(6)
+              const data = JSON.parse(jsonStr) as ProcessParcelProgress
+              
+              // Update state immediately for real-time feel
               setProgress(prev => [...prev, data])
               setCurrentMessage(data)
 
@@ -144,7 +156,7 @@ export function useProcessParcelStream() {
                 } else {
                   toast.info('Processing complete', {
                     description: stats?.lead_score 
-                      ? `Lead score: ${stats.lead_score}/100, no contact found`
+                      ? `Lead score: ${stats.lead_score}/100`
                       : 'Property processed'
                   })
                 }
@@ -155,7 +167,7 @@ export function useProcessParcelStream() {
                 toast.error(data.message)
               }
             } catch (e) {
-              console.error('Failed to parse SSE data:', e)
+              console.error('Failed to parse SSE data:', e, line)
             }
           }
         }
