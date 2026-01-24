@@ -590,7 +590,7 @@ class RegridService:
             params = {
                 "token": self.api_key,
                 "fields[owner][ilike]": clean_name,  # Case-insensitive LIKE search
-                "limit": min(max_results, 100),
+                "limit": min(max_results, 1000),
             }
             
             # Add geographic filter
@@ -772,7 +772,7 @@ class RegridService:
                     "token": self.api_key,
                     f"fields[{lbcs_field}][gte]": lbcs_min,
                     f"fields[{lbcs_field}][lte]": lbcs_max,
-                    "limit": min(max_results - len(all_parcels), 100),
+                    "limit": min(max_results - len(all_parcels), 1000),
                 }
                 
                 # Add pagination offset
@@ -887,7 +887,7 @@ class RegridService:
                 params = {
                     "token": self.api_key,
                     "fields[usecode][eq]": usecode,
-                    "limit": min(max_results * 3, 100),  # Get more to filter
+                    "limit": min(max_results * 3, 1000),  # Get more to filter
                 }
                 
                 # Add geographic filter

@@ -902,7 +902,7 @@ class DiscoveryOrchestrator:
                 logger.warning(f"   ⚠️  All {skipped_count} businesses in this area already processed")
                 logger.info(f"   💡 Tip: Try a different area or expand the search radius")
             else:
-                logger.warning("   ⚠️  No businesses found in area")
+            logger.warning("   ⚠️  No businesses found in area")
             self._update_job(job_key, DiscoveryStep.COMPLETED)
             return
         
@@ -1219,7 +1219,7 @@ class DiscoveryOrchestrator:
                             logger.info(f"         Confidence: {enrichment_result.confidence:.0%}")
                             if enrichment_result.management_company:
                                 logger.info(f"         Company: {enrichment_result.management_company}")
-                        else:
+                else:
                             db_property.enrichment_status = "not_found"
                             if enrichment_result.error_message:
                                 logger.info(f"      ⚠️ Enrichment: {enrichment_result.error_message}")
@@ -1481,7 +1481,7 @@ class DiscoveryOrchestrator:
                 if existing_property:
                     logger.info(f"      ♻️ Property already exists, updating contact info")
                     db_property = existing_property
-                else:
+                    else:
                     # Create new property
                     from shapely.geometry import Point
                     centroid = parcel.centroid if parcel.centroid else Point(0, 0)
@@ -1604,7 +1604,7 @@ class DiscoveryOrchestrator:
                             vlm_total_cost += vlm_result.usage.cost
                         
                         logger.info(f"      🎯 VLM Score: {vlm_result.lead_score}/100 ({db_property.lead_quality})")
-                    else:
+                else:
                         logger.warning(f"      ⚠️ VLM analysis failed: {vlm_result.error_message}")
                 else:
                     logger.warning(f"      ⚠️ Imagery failed: {imagery_result.error_message}")

@@ -1,169 +1,159 @@
-/**
- * Free boundary fetching using Google Geocoding API
- * Gets approximate bounds for ZIP codes and counties
- */
+import { apiClient } from './client'
 
-export interface BoundaryData {
-  bounds: {
-    north: number
-    south: number
-    east: number
-    west: number
-  }
-  viewport?: {
-    northeast: { lat: number; lng: number }
-    southwest: { lat: number; lng: number }
-  }
-  center: { lat: number; lng: number }
-  type: 'zip' | 'county'
-  radius?: number // For county circles
+// ============================================================
+// Types
+// ============================================================
+
+export interface BoundaryLayer {
+  id: string
+  name: string
+  available: boolean
+  size_mb: number
+  loaded: boolean
 }
 
-export async function fetchZipBoundary(zip: string): Promise<BoundaryData | null> {
-  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
-  if (!apiKey) return null
+export interface BoundarySearchResult {
+  id: string
+  name: string
+  properties: Record<string, string>
+}
 
-  try {
-    // Geocode ZIP code
-    const response = await fetch(
-      `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(zip)}&key=${apiKey}`
+export interface BoundaryFeature {
+  type: 'Feature'
+  properties: {
+    id: string
+    name: string
+    display_name?: string
+    [key: string]: string | undefined
+  }
+  geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon
+}
+
+export interface BoundaryLayerResponse {
+  type: 'FeatureCollection'
+  features: BoundaryFeature[]
+  total_in_layer?: number
+  returned?: number
+  truncated?: boolean
+}
+
+export interface ViewportBounds {
+  minLng: number
+  minLat: number
+  maxLng: number
+  maxLat: number
+}
+
+export interface BoundaryAtPointResponse {
+  found: boolean
+  layer: string
+  lat: number
+  lng: number
+  boundary: {
+    id: string
+    name: string
+    properties: Record<string, string>
+    geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon
+  } | null
+}
+
+// ============================================================
+// API Functions
+// ============================================================
+
+export const boundariesApi = {
+  /**
+   * Get list of available boundary layers
+   */
+  getLayers: async (): Promise<BoundaryLayer[]> => {
+    const { data } = await apiClient.get<BoundaryLayer[]>('/boundaries/layers')
+    return data
+  },
+
+  /**
+   * Get a boundary layer as GeoJSON
+   * For large layers (counties, zips, urban_areas), bounds are required
+   */
+  getLayer: async (
+    layerId: string,
+    bounds?: ViewportBounds,
+    limit: number = 500
+  ): Promise<BoundaryLayerResponse> => {
+    const params: Record<string, string | number> = { limit }
+    
+    if (bounds) {
+      params.min_lng = bounds.minLng
+      params.min_lat = bounds.minLat
+      params.max_lng = bounds.maxLng
+      params.max_lat = bounds.maxLat
+    }
+    
+    const { data } = await apiClient.get<BoundaryLayerResponse>(
+      `/boundaries/layer/${layerId}`,
+      { params }
     )
-    const data = await response.json()
+    return data
+  },
 
-    if (data.status !== 'OK' || !data.results?.[0]) {
-      return null
-    }
-
-    const result = data.results[0]
-    const geometry = result.geometry
-
-    // Prefer viewport for ZIP codes (tighter, more accurate)
-    if (geometry.viewport) {
-      return {
-        bounds: {
-          north: geometry.viewport.northeast.lat,
-          south: geometry.viewport.southwest.lat,
-          east: geometry.viewport.northeast.lng,
-          west: geometry.viewport.southwest.lng,
-        },
-        viewport: geometry.viewport,
-        center: {
-          lat: geometry.location.lat,
-          lng: geometry.location.lng,
-        },
-        type: 'zip',
-      }
-    }
-
-    // Fallback to bounds if viewport not available
-    if (geometry.bounds) {
-      return {
-        bounds: {
-          north: geometry.bounds.northeast.lat,
-          south: geometry.bounds.southwest.lat,
-          east: geometry.bounds.northeast.lng,
-          west: geometry.bounds.southwest.lng,
-        },
-        viewport: geometry.viewport,
-        center: {
-          lat: geometry.location.lat,
-          lng: geometry.location.lng,
-        },
-        type: 'zip',
-      }
-    }
-
-    // Fallback to viewport if bounds not available
-    if (geometry.viewport) {
-      return {
-        bounds: {
-          north: geometry.viewport.northeast.lat,
-          south: geometry.viewport.southwest.lat,
-          east: geometry.viewport.northeast.lng,
-          west: geometry.viewport.southwest.lng,
-        },
-        viewport: geometry.viewport,
-        center: {
-          lat: geometry.location.lat,
-          lng: geometry.location.lng,
-        },
-        type: 'zip',
-      }
-    }
-
-    return null
-  } catch (error) {
-    console.error('Error fetching ZIP boundary:', error)
-    return null
-  }
-}
-
-export async function fetchCountyBoundary(
-  county: string,
-  state: string
-): Promise<BoundaryData | null> {
-  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
-  if (!apiKey) return null
-
-  try {
-    // Geocode county
-    const query = `${county} County, ${state}`
-    const response = await fetch(
-      `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&key=${apiKey}`
+  /**
+   * Search boundaries by name within a layer
+   */
+  searchLayer: async (
+    layerId: string,
+    query: string,
+    limit: number = 20
+  ): Promise<{ results: BoundarySearchResult[], count: number }> => {
+    const { data } = await apiClient.get<{ results: BoundarySearchResult[], count: number }>(
+      `/boundaries/layer/${layerId}/search`,
+      { params: { q: query, limit } }
     )
-    const data = await response.json()
+    return data
+  },
 
-    if (data.status !== 'OK' || !data.results?.[0]) {
-      return null
-    }
+  /**
+   * Get a specific boundary by ID
+   */
+  getBoundary: async (layerId: string, boundaryId: string): Promise<BoundaryFeature> => {
+    const { data } = await apiClient.get<BoundaryFeature>(
+      `/boundaries/layer/${layerId}/${boundaryId}`
+    )
+    return data
+  },
 
-    const result = data.results[0]
-    const geometry = result.geometry
-    const center = {
-      lat: geometry.location.lat,
-      lng: geometry.location.lng,
-    }
+  /**
+   * Preload a boundary layer into cache (faster subsequent loads)
+   */
+  preloadLayer: async (layerId: string): Promise<{ layer: string, loaded: boolean, feature_count: number }> => {
+    const { data } = await apiClient.post<{ layer: string, loaded: boolean, feature_count: number }>(
+      `/boundaries/layer/${layerId}/preload`
+    )
+    return data
+  },
 
-    // For counties, use viewport (tighter) or create a reasonable circle
-    // Instead of huge bounding box, use viewport which is usually more reasonable
-    if (geometry.viewport) {
-      return {
-        bounds: {
-          north: geometry.viewport.northeast.lat,
-          south: geometry.viewport.southwest.lat,
-          east: geometry.viewport.northeast.lng,
-          west: geometry.viewport.southwest.lng,
-        },
-        viewport: geometry.viewport,
-        center,
-        type: 'county',
-      }
-    }
+  /**
+   * Clear boundary cache
+   */
+  clearCache: async (layerId?: string): Promise<{ cleared: string }> => {
+    const { data } = await apiClient.delete<{ cleared: string }>('/boundaries/cache', {
+      params: layerId ? { layer_id: layerId } : {},
+    })
+    return data
+  },
 
-    // Fallback: Create a reasonable circle around center (30km radius)
-    // This gives a ~60km diameter circle which is reasonable for most counties
-    const radiusKm = 30
-    const latDelta = radiusKm / 111 // ~111km per degree latitude
-    const lngDelta = radiusKm / (111 * Math.cos(center.lat * Math.PI / 180))
-
-    return {
-      bounds: {
-        north: center.lat + latDelta,
-        south: center.lat - latDelta,
-        east: center.lng + lngDelta,
-        west: center.lng - lngDelta,
-      },
-      viewport: {
-        northeast: { lat: center.lat + latDelta, lng: center.lng + lngDelta },
-        southwest: { lat: center.lat - latDelta, lng: center.lng - lngDelta },
-      },
-      center,
-      type: 'county',
-      radius: radiusKm,
-    }
-  } catch (error) {
-    console.error('Error fetching county boundary:', error)
-    return null
-  }
+  /**
+   * Find boundary at a point (click-to-select)
+   * @param lat Latitude
+   * @param lng Longitude
+   * @param layer 'zips' | 'counties' | 'states'
+   */
+  getBoundaryAtPoint: async (
+    lat: number,
+    lng: number,
+    layer: 'zips' | 'counties' | 'states' = 'zips'
+  ): Promise<BoundaryAtPointResponse> => {
+    const { data } = await apiClient.get<BoundaryAtPointResponse>('/boundaries/point', {
+      params: { lat, lng, layer }
+    })
+    return data
+  },
 }
-

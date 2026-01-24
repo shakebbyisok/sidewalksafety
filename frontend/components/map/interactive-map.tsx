@@ -1,13 +1,24 @@
 'use client'
 
 import { useMemo, useCallback, useEffect, useState, useRef } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { APIProvider, Map, Marker, useMap, InfoWindow, useMapsLibrary } from '@vis.gl/react-google-maps'
 import { MarkerClusterer, GridAlgorithm } from '@googlemaps/markerclusterer'
 import { DealMapResponse, PropertyAnalysisSummary } from '@/types'
-import { MapPin, ExternalLink, Satellite, Map as MapIcon, X, CheckCircle2, Clock, Target, Building2, Phone, Globe, AlertTriangle, Search, Loader2, Layers, User } from 'lucide-react'
+import { MapPin, ExternalLink, Satellite, Map as MapIcon, X, CheckCircle2, Clock, Target, Building2, Phone, Globe, AlertTriangle, Search, Loader2, Layers, User, Pentagon } from 'lucide-react'
 import { StatusChip, IconChip } from '@/components/ui'
 import { cn } from '@/lib/utils'
 import { parkingLotsApi } from '@/lib/api/parking-lots'
+import { SearchParcel } from '@/lib/api/search'
+import { BoundaryLayerResponse, BoundaryFeature, boundariesApi } from '@/lib/api/boundaries'
+
+// Boundary layer colors
+const BOUNDARY_LAYER_COLORS: Record<string, { stroke: string; fill: string }> = {
+  states: { stroke: '#6366f1', fill: 'rgba(99, 102, 241, 0.08)' },
+  counties: { stroke: '#f59e0b', fill: 'rgba(245, 158, 11, 0.08)' },
+  zips: { stroke: '#10b981', fill: 'rgba(16, 185, 129, 0.05)' },
+  urban_areas: { stroke: '#ef4444', fill: 'rgba(239, 68, 68, 0.08)' },
+}
 
 // Surface colors for polygon overlays
 const SURFACE_COLORS: Record<string, { fill: string; stroke: string; label: string }> = {
@@ -15,6 +26,13 @@ const SURFACE_COLORS: Record<string, { fill: string; stroke: string; label: stri
   concrete: { fill: '#9CA3AF', stroke: '#6B7280', label: 'Concrete' },
   building: { fill: '#DC2626', stroke: '#991B1B', label: 'Building' },
   property_boundary: { fill: '#3B82F6', stroke: '#1D4ED8', label: 'Property' },
+}
+
+// Urban area info type for search guidance
+interface UrbanAreaInfo {
+  id: string
+  name: string
+  geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon
 }
 
 interface InteractiveMapProps {
@@ -26,6 +44,24 @@ interface InteractiveMapProps {
   onMapClick?: (lat: number, lng: number) => void
   clickedLocation?: { lat: number; lng: number } | null
   previewPolygon?: any // GeoJSON polygon to preview on map
+  // Search features
+  searchResults?: SearchParcel[]
+  isDrawingPolygon?: boolean
+  onPolygonDrawn?: (polygon: GeoJSON.Polygon) => void
+  // County boundary display
+  countyBoundary?: { boundary: GeoJSON.Polygon | GeoJSON.MultiPolygon | null; name: string }
+  // Boundary layer display (states, counties, zips, urban areas from KML)
+  boundaryLayer?: { data: BoundaryLayerResponse | null; layerId: string | null }
+  // Click-to-select mode for ZIP/County/Pin/Urban search
+  mapClickMode?: 'zip' | 'county' | 'pin' | 'urban' | null
+  // Pin parcel polygon to display
+  pinParcelPolygon?: GeoJSON.Polygon | GeoJSON.MultiPolygon | null
+  // Drawn polygon for search (from drawing tool)
+  drawnPolygon?: GeoJSON.Polygon | null
+  // Urban area overlay for search guidance
+  showUrbanOverlay?: boolean
+  selectedUrbanArea?: UrbanAreaInfo | null
+  onUrbanAreaSelect?: (urbanArea: UrbanAreaInfo | null) => void
 }
 
 // Clean, modern map style with subtle colors
@@ -521,6 +557,70 @@ function PropertyOverlay({
   return null
 }
 
+// Component to display drawn polygon with improved styling
+function DrawnPolygonLayer({ polygon }: { polygon: GeoJSON.Polygon | GeoJSON.MultiPolygon }) {
+  const map = useMap()
+  const polygonRef = useRef<google.maps.Polygon | null>(null)
+
+  useEffect(() => {
+    if (!map || !polygon) {
+      if (polygonRef.current) {
+        polygonRef.current.setMap(null)
+        polygonRef.current = null
+      }
+      return
+    }
+
+    // Parse GeoJSON coordinates
+    let coords: google.maps.LatLngLiteral[] = []
+    try {
+      if (polygon.type === 'Polygon' && polygon.coordinates) {
+        coords = polygon.coordinates[0].map((coord: number[]) => ({
+          lat: coord[1],
+          lng: coord[0],
+        }))
+      } else if (polygon.type === 'MultiPolygon' && polygon.coordinates) {
+        coords = polygon.coordinates[0][0].map((coord: number[]) => ({
+          lat: coord[1],
+          lng: coord[0],
+        }))
+      }
+    } catch (e) {
+      console.error('Failed to parse drawn polygon:', e)
+      return
+    }
+
+    if (coords.length === 0) return
+
+    // Create or update polygon with improved styling
+    if (polygonRef.current) {
+      polygonRef.current.setPath(coords)
+    } else {
+      polygonRef.current = new google.maps.Polygon({
+        paths: coords,
+        strokeColor: '#059669', // Emerald green
+        strokeOpacity: 1,
+        strokeWeight: 3,
+        fillColor: '#10b981', // Lighter green
+        fillOpacity: 0.2,
+        map: map,
+        zIndex: 1001, // Above other polygons
+        editable: false,
+        clickable: false,
+      })
+    }
+
+    return () => {
+      if (polygonRef.current) {
+        polygonRef.current.setMap(null)
+        polygonRef.current = null
+      }
+    }
+  }, [map, polygon])
+
+  return null
+}
+
 // Component to draw preview polygon on map
 function PreviewPolygonLayer({ polygon }: { polygon: any }) {
   const map = useMap()
@@ -599,10 +699,33 @@ export function InteractiveMap({
   onMapClick,
   clickedLocation,
   previewPolygon,
+  searchResults = [],
+  isDrawingPolygon = false,
+  onPolygonDrawn,
+  countyBoundary,
+  boundaryLayer,
+  mapClickMode,
+  pinParcelPolygon,
+  drawnPolygon,
+  showUrbanOverlay = false,
+  selectedUrbanArea,
+  onUrbanAreaSelect,
 }: InteractiveMapProps) {
   const [mapType, setMapType] = useState<'roadmap' | 'hybrid'>('roadmap')
   const [searchLocation, setSearchLocation] = useState<{ lat: number; lng: number; name: string } | null>(null)
   const [showOverlay, setShowOverlay] = useState(true) // Show property boundaries by default
+  const [selectedSearchResult, setSelectedSearchResult] = useState<SearchParcel | null>(null)
+  
+  // Preload urban areas data in background (silent, cached)
+  // This ensures instant rendering when overlay is shown
+  useQuery({
+    queryKey: ['boundaries', 'urban_areas', 'preload'],
+    queryFn: () => boundariesApi.getLayer('urban_areas', undefined, 1000),
+    staleTime: Infinity, // Cache forever
+    gcTime: Infinity, // Keep in cache forever
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  })
   
   const handlePlaceSelect = useCallback((lat: number, lng: number, name: string) => {
     setSearchLocation({ lat, lng, name })
@@ -651,30 +774,30 @@ export function InteractiveMap({
   return (
     <div className="relative w-full h-full cursor-crosshair">
       <APIProvider apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY} libraries={['places']}>
-        {/* Top Controls: Search Bar + Map Type Toggle */}
-        <div className="absolute top-4 left-4 right-4 z-10 flex items-center justify-between gap-4">
+        {/* Top Controls: Search Bar */}
+        <div className="absolute top-4 left-4 z-10">
           {/* Search Box */}
           <PlaceSearchBox onPlaceSelect={handlePlaceSelect} />
-          
-          <div className="flex items-center gap-2">
-            {/* Show Overlay Toggle (only visible when deal is selected) */}
-            {selectedDeal && (
-              <div className="relative">
-                <button
-                  onClick={() => setShowOverlay(prev => !prev)}
-                  className={cn(
-                    "flex items-center gap-2 px-3 py-2.5 rounded-lg shadow-lg hover:shadow-xl transition-all border",
-                    showOverlay 
-                      ? "bg-blue-500 text-white border-blue-600 hover:bg-blue-600" 
-                      : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
-                  )}
-                  title={showOverlay ? 'Hide Property Boundaries' : 'Show Property Boundaries'}
-                >
-                  <Layers className="h-4 w-4" />
-                  <span className="text-sm font-medium">Segments</span>
-                </button>
-              </div>
-            )}
+        </div>
+
+        {/* Bottom Right Controls: Map Type Toggle + Segments Toggle */}
+        <div className="absolute bottom-4 right-4 z-10 flex items-center gap-2">
+          {/* Show Overlay Toggle (only visible when deal is selected) */}
+          {selectedDeal && (
+            <button
+              onClick={() => setShowOverlay(prev => !prev)}
+              className={cn(
+                "flex items-center gap-2 px-3 py-2.5 rounded-lg shadow-lg hover:shadow-xl transition-all border",
+                showOverlay 
+                  ? "bg-blue-500 text-white border-blue-600 hover:bg-blue-600" 
+                  : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+              )}
+              title={showOverlay ? 'Hide Property Boundaries' : 'Show Property Boundaries'}
+            >
+              <Layers className="h-4 w-4" />
+              <span className="text-sm font-medium">Segments</span>
+            </button>
+          )}
           
           {/* Map Type Toggle Button */}
           <button
@@ -694,7 +817,6 @@ export function InteractiveMap({
               </>
             )}
           </button>
-          </div>
         </div>
         <Map
           defaultCenter={defaultCenter}
@@ -723,6 +845,12 @@ export function InteractiveMap({
           
           {/* Preview polygon for clicked location */}
           {previewPolygon && <PreviewPolygonLayer polygon={previewPolygon} />}
+          
+          {/* Drawn polygon for search - better styling */}
+          {drawnPolygon && <DrawnPolygonLayer polygon={drawnPolygon} />}
+          
+          {/* Pin parcel polygon */}
+          {pinParcelPolygon && <PreviewPolygonLayer polygon={pinParcelPolygon} />}
 
           <MarkerClustererComponent
             deals={dealsWithLocation}
@@ -769,6 +897,49 @@ export function InteractiveMap({
               </div>
             </InfoWindow>
           )}
+
+          {/* Search Results Markers */}
+          <SearchResultsLayer
+            results={searchResults}
+            selectedResult={selectedSearchResult}
+            onResultSelect={setSelectedSearchResult}
+          />
+
+          {/* County Boundary Layer */}
+          {countyBoundary?.boundary && (
+            <CountyBoundaryLayer
+              boundary={countyBoundary.boundary}
+              name={countyBoundary.name}
+            />
+          )}
+
+          {/* KML Boundary Layer (states, counties, zips, urban areas) */}
+          <KMLBoundaryLayerWrapper boundaryLayer={boundaryLayer} />
+
+          {/* Urban Areas Overlay for Search Guidance */}
+          {showUrbanOverlay && (
+            <UrbanAreasOverlay
+              selectedUrbanArea={selectedUrbanArea}
+              onUrbanAreaSelect={onUrbanAreaSelect}
+            />
+          )}
+
+          {/* Selected Urban Area Highlight (when area is selected and overlay is hidden) */}
+          {selectedUrbanArea && !showUrbanOverlay && (
+            <SelectedUrbanAreaLayer
+              urbanArea={selectedUrbanArea}
+            />
+          )}
+
+          {/* Polygon Drawing Controller */}
+          {onPolygonDrawn && (
+            <PolygonDrawingController 
+              isEnabled={isDrawingPolygon} 
+              onPolygonComplete={onPolygonDrawn} 
+            />
+          )}
+
+          {/* Search result info window */}
         </Map>
         
         {/* Segment Legend - shows when overlay is visible and deal is selected */}
@@ -1295,6 +1466,886 @@ function ParkingLotPopup({
           View Details
           <ExternalLink className="h-3.5 w-3.5" />
         </button>
+      </div>
+    </div>
+  )
+}
+
+// County Boundary Layer - displays selected county boundary
+function CountyBoundaryLayer({
+  boundary,
+  name,
+}: {
+  boundary: GeoJSON.Polygon | GeoJSON.MultiPolygon
+  name: string
+}) {
+  const map = useMap()
+  const polygonsRef = useRef<google.maps.Polygon[]>([])
+
+  useEffect(() => {
+    if (!map || !boundary) return
+
+    // Clear existing polygons
+    polygonsRef.current.forEach(p => p.setMap(null))
+    polygonsRef.current = []
+
+    // Parse coordinates based on geometry type
+    let allPaths: google.maps.LatLngLiteral[][] = []
+
+    if (boundary.type === 'Polygon') {
+      // Single polygon - all rings
+      allPaths = boundary.coordinates.map(ring =>
+        ring.map(coord => ({ lat: coord[1], lng: coord[0] }))
+      )
+    } else if (boundary.type === 'MultiPolygon') {
+      // Multiple polygons
+      boundary.coordinates.forEach(polygon => {
+        polygon.forEach(ring => {
+          allPaths.push(ring.map(coord => ({ lat: coord[1], lng: coord[0] })))
+        })
+      })
+    }
+
+    // Create polygon
+    if (allPaths.length > 0) {
+      const polygon = new google.maps.Polygon({
+        paths: allPaths,
+        strokeColor: '#6366f1',  // Indigo
+        strokeOpacity: 1,
+        strokeWeight: 3,
+        fillColor: '#6366f1',
+        fillOpacity: 0.05,
+        map,
+        zIndex: 10,
+      })
+
+      polygonsRef.current.push(polygon)
+
+      // Fit bounds to county
+      const bounds = new google.maps.LatLngBounds()
+      allPaths.forEach(path => {
+        path.forEach(coord => bounds.extend(coord))
+      })
+      map.fitBounds(bounds, { top: 100, right: 50, bottom: 50, left: 350 })
+    }
+
+    return () => {
+      polygonsRef.current.forEach(p => p.setMap(null))
+    }
+  }, [map, boundary])
+
+  return null
+}
+
+// Urban Areas Overlay Component - for search guidance
+function UrbanAreasOverlay({
+  selectedUrbanArea,
+  onUrbanAreaSelect,
+}: {
+  selectedUrbanArea?: UrbanAreaInfo | null
+  onUrbanAreaSelect?: (urbanArea: UrbanAreaInfo | null) => void
+}) {
+  const map = useMap()
+  const dataLayerRef = useRef<google.maps.Data | null>(null)
+  const infoWindowRef = useRef<google.maps.InfoWindow | null>(null)
+  const overlayRef = useRef<google.maps.Rectangle | null>(null)
+  
+  // Use React Query to fetch urban areas (uses cache if preloaded)
+  // This will be instant if data was preloaded in InteractiveMap
+  const { data: urbanAreas, isLoading } = useQuery({
+    queryKey: ['boundaries', 'urban_areas', 'preload'],
+    queryFn: () => boundariesApi.getLayer('urban_areas', undefined, 1000),
+    staleTime: Infinity,
+    gcTime: Infinity,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  })
+  
+  // Render urban areas on map
+  useEffect(() => {
+    if (!map || isLoading || !urbanAreas || urbanAreas.features.length === 0) return
+    
+    console.log(`[UrbanOverlay] Rendering ${urbanAreas.features.length} urban areas`)
+    
+    // Create semi-transparent overlay for non-urban areas (greying effect)
+    if (!overlayRef.current) {
+      overlayRef.current = new google.maps.Rectangle({
+        map,
+        bounds: {
+          north: 85,
+          south: -85,
+          west: -180,
+          east: 180,
+        },
+        strokeWeight: 0,
+        fillColor: '#1f2937',  // Dark grey
+        fillOpacity: 0.35,
+        clickable: false,
+        zIndex: 5,
+      })
+    }
+    
+    // Clear existing data layer if it exists (shouldn't happen, but safety check)
+    if (dataLayerRef.current) {
+      dataLayerRef.current.setMap(null)
+      dataLayerRef.current = null
+    }
+    
+    // Create info window without close button
+    if (!infoWindowRef.current) {
+      infoWindowRef.current = new google.maps.InfoWindow({
+        disableAutoPan: false,
+      })
+      // Hide the close button using CSS after InfoWindow is created
+      // We'll inject CSS to hide the close button for this specific InfoWindow
+    }
+    
+    // Create data layer for urban areas
+    const dataLayer = new google.maps.Data({ map })
+    dataLayerRef.current = dataLayer
+    
+    // Style: highlighted urban areas that "punch through" the grey overlay
+    dataLayer.setStyle((feature) => {
+      const featureId = feature.getProperty('id')
+      const isSelected = selectedUrbanArea?.id === featureId
+      
+      return {
+        strokeColor: isSelected ? '#6366f1' : '#f97316',  // Indigo when selected, orange otherwise
+        strokeOpacity: 1,
+        strokeWeight: isSelected ? 3 : 2,
+        fillColor: isSelected ? '#6366f1' : '#fef3c7',  // Light amber fill
+        fillOpacity: isSelected ? 0.3 : 0.9,  // High opacity to show through grey
+        zIndex: isSelected ? 15 : 10,
+      }
+    })
+    
+    // Add click listener
+    dataLayer.addListener('click', (event: google.maps.Data.MouseEvent) => {
+      const feature = event.feature
+      const name = feature.getProperty('name') as string
+      const id = feature.getProperty('id') as string
+      
+      if (onUrbanAreaSelect) {
+        // Get the geometry from the feature
+        const geom = feature.getGeometry()
+        let geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon | null = null
+        
+        if (geom) {
+          const type = geom.getType()
+          if (type === 'Polygon') {
+            const poly = geom as google.maps.Data.Polygon
+            const coords: number[][][] = []
+            poly.getArray().forEach(ring => {
+              const ringCoords: number[][] = []
+              ring.getArray().forEach(pt => {
+                ringCoords.push([pt.lng(), pt.lat()])
+              })
+              coords.push(ringCoords)
+            })
+            geometry = { type: 'Polygon', coordinates: coords }
+          } else if (type === 'MultiPolygon') {
+            const multiPoly = geom as google.maps.Data.MultiPolygon
+            const coords: number[][][][] = []
+            multiPoly.getArray().forEach(poly => {
+              const polyCoords: number[][][] = []
+              poly.getArray().forEach(ring => {
+                const ringCoords: number[][] = []
+                ring.getArray().forEach(pt => {
+                  ringCoords.push([pt.lng(), pt.lat()])
+                })
+                polyCoords.push(ringCoords)
+              })
+              coords.push(polyCoords)
+            })
+            geometry = { type: 'MultiPolygon', coordinates: coords }
+          }
+        }
+        
+        if (geometry) {
+          onUrbanAreaSelect({
+            id,
+            name,
+            geometry,
+          })
+          
+          // Zoom to the selected area
+          const bounds = new google.maps.LatLngBounds()
+          if (geom) {
+            geom.forEachLatLng(pt => bounds.extend(pt))
+          }
+          map.fitBounds(bounds, { top: 100, right: 50, bottom: 50, left: 350 })
+        }
+      }
+    })
+    
+    // Hover effect
+    dataLayer.addListener('mouseover', (event: google.maps.Data.MouseEvent) => {
+      const name = event.feature.getProperty('name')
+      if (infoWindowRef.current && event.latLng) {
+        infoWindowRef.current.setContent(`
+          <div style="padding: 8px;">
+            <div style="font-weight: 600; font-size: 13px;">${name}</div>
+            <div style="font-size: 11px; color: #666; margin-top: 2px;">Click to select metro area</div>
+          </div>
+        `)
+        infoWindowRef.current.setPosition(event.latLng)
+        infoWindowRef.current.open(map)
+        
+        // Hide the close button after InfoWindow opens
+        setTimeout(() => {
+          const infoWindowElement = document.querySelector('.gm-style-iw-d')?.parentElement
+          if (infoWindowElement) {
+            const closeButton = infoWindowElement.querySelector('button[aria-label*="Close"], button[title*="Close"], .gm-ui-hover-effect')
+            if (closeButton) {
+              ;(closeButton as HTMLElement).style.display = 'none'
+            }
+          }
+        }, 10)
+      }
+      
+      dataLayer.overrideStyle(event.feature, {
+        strokeWeight: 3,
+        fillOpacity: 0.95,
+      })
+    })
+    
+    dataLayer.addListener('mouseout', (event: google.maps.Data.MouseEvent) => {
+      if (infoWindowRef.current) {
+        infoWindowRef.current.close()
+      }
+      dataLayer.revertStyle(event.feature)
+    })
+    
+    // Add GeoJSON data
+    try {
+      dataLayer.addGeoJson({
+        type: 'FeatureCollection',
+        features: urbanAreas.features.map(f => ({
+          type: 'Feature' as const,
+          properties: f.properties,
+          geometry: f.geometry,
+        })),
+      })
+      console.log(`[UrbanOverlay] Rendered ${urbanAreas.features.length} urban areas`)
+    } catch (error) {
+      console.error('[UrbanOverlay] Error adding GeoJSON:', error)
+    }
+    
+    // Cleanup function - only runs on unmount or when urbanAreas changes
+    return () => {
+      if (dataLayerRef.current) {
+        dataLayerRef.current.setMap(null)
+        dataLayerRef.current = null
+      }
+    }
+  }, [map, urbanAreas, selectedUrbanArea?.id, onUrbanAreaSelect])
+  
+  // Cleanup on unmount (when showUrbanOverlay becomes false or component unmounts)
+  useEffect(() => {
+    return () => {
+      if (dataLayerRef.current) {
+        dataLayerRef.current.setMap(null)
+        dataLayerRef.current = null
+      }
+      if (overlayRef.current) {
+        overlayRef.current.setMap(null)
+        overlayRef.current = null
+      }
+      if (infoWindowRef.current) {
+        infoWindowRef.current.close()
+        infoWindowRef.current = null
+      }
+    }
+  }, [])
+  
+  return null
+}
+
+// Selected Urban Area Layer - shows selected area highlighted with grey overlay outside
+function SelectedUrbanAreaLayer({
+  urbanArea,
+}: {
+  urbanArea: UrbanAreaInfo
+  onZoomToArea?: (geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon) => void
+}) {
+  const map = useMap()
+  const polygonsRef = useRef<google.maps.Polygon[]>([])
+  const overlayRef = useRef<google.maps.Rectangle | null>(null)
+  const hasZoomedRef = useRef(false)
+  
+  useEffect(() => {
+    if (!map) {
+      console.log('[SelectedUrbanArea] No map available')
+      return
+    }
+    
+    console.log('[SelectedUrbanArea] Rendering area:', urbanArea.name)
+    
+    // Zoom to urban area bounds (only once)
+    if (!hasZoomedRef.current) {
+      const bounds = new google.maps.LatLngBounds()
+      
+      if (urbanArea.geometry.type === 'Polygon') {
+        urbanArea.geometry.coordinates.forEach(ring => {
+          ring.forEach(([lng, lat]) => {
+            bounds.extend({ lat, lng })
+          })
+        })
+      } else if (urbanArea.geometry.type === 'MultiPolygon') {
+        urbanArea.geometry.coordinates.forEach(polygon => {
+          polygon.forEach(ring => {
+            ring.forEach(([lng, lat]) => {
+              bounds.extend({ lat, lng })
+            })
+          })
+        })
+      }
+      
+      map.fitBounds(bounds, { top: 50, right: 320, bottom: 50, left: 50 })
+      hasZoomedRef.current = true
+      console.log('[SelectedUrbanArea] Zoomed to bounds')
+    }
+    
+    // No grey overlay - just show the selected area border
+    // Clear any existing overlay
+    if (overlayRef.current) {
+      overlayRef.current.setMap(null)
+      overlayRef.current = null
+    }
+    
+    // Clear existing polygons
+    polygonsRef.current.forEach(p => p.setMap(null))
+    polygonsRef.current = []
+    
+    // Create polygon(s) for selected urban area
+    const createPolygon = (coordinates: number[][][]): google.maps.Polygon => {
+      // First ring is exterior, rest are holes
+      const exteriorPath = coordinates[0].map(([lng, lat]) => new google.maps.LatLng(lat, lng))
+      const holes = coordinates.slice(1).map(ring => 
+        ring.map(([lng, lat]) => new google.maps.LatLng(lat, lng))
+      )
+      
+      return new google.maps.Polygon({
+        map,
+        paths: [exteriorPath, ...holes],
+        strokeColor: '#f97316',  // Orange border
+        strokeOpacity: 1,
+        strokeWeight: 2,
+        fillColor: '#f97316',  // Orange fill
+        fillOpacity: 0.08,  // Very subtle - can see everything through it
+        clickable: false,
+        zIndex: 10,
+      })
+    }
+    
+    if (urbanArea.geometry.type === 'Polygon') {
+      const polygon = createPolygon(urbanArea.geometry.coordinates)
+      polygonsRef.current.push(polygon)
+      console.log('[SelectedUrbanArea] Created polygon')
+    } else if (urbanArea.geometry.type === 'MultiPolygon') {
+      urbanArea.geometry.coordinates.forEach((polygonCoords, i) => {
+        const polygon = createPolygon(polygonCoords)
+        polygonsRef.current.push(polygon)
+      })
+      console.log('[SelectedUrbanArea] Created', urbanArea.geometry.coordinates.length, 'polygons')
+    }
+    
+    // No cleanup in this effect - we want the polygon to persist
+  }, [map, urbanArea])
+  
+  // Cleanup only on unmount
+  useEffect(() => {
+    return () => {
+      console.log('[SelectedUrbanArea] Unmounting, cleaning up')
+      polygonsRef.current.forEach(p => p.setMap(null))
+      polygonsRef.current = []
+      if (overlayRef.current) {
+        overlayRef.current.setMap(null)
+        overlayRef.current = null
+      }
+      hasZoomedRef.current = false
+    }
+  }, [])
+  
+  return null
+}
+
+// Global storage for boundary layer - uses Google Maps Data layer for efficiency
+const kmlDataStorage = {
+  dataLayer: null as google.maps.Data | null,
+  infoWindow: null as google.maps.InfoWindow | null,
+  currentLayerId: '',
+  featureCount: 0,
+  
+  clear(map?: google.maps.Map) {
+    if (this.dataLayer) {
+      this.dataLayer.setMap(null)
+      this.dataLayer = null
+    }
+    this.currentLayerId = ''
+    this.featureCount = 0
+  }
+}
+
+// KML Boundary Layer - uses Data layer for efficient rendering of large datasets
+function KMLBoundaryLayerWrapper({
+  boundaryLayer,
+}: {
+  boundaryLayer?: { data: BoundaryLayerResponse | null; layerId: string | null }
+}) {
+  const map = useMap()
+  
+  // Extract values to use as stable dependencies
+  const layerId = boundaryLayer?.layerId ?? null
+  const data = boundaryLayer?.data ?? null
+  const featureCount = data?.features?.length ?? 0
+  
+  useEffect(() => {
+    // If no data or no layer, clear existing
+    if (!data || !layerId || !map || featureCount === 0) {
+      if (kmlDataStorage.currentLayerId !== '') {
+        kmlDataStorage.clear(map)
+      }
+      return
+    }
+    
+    // Skip if same layer already rendered with same feature count
+    if (kmlDataStorage.currentLayerId === layerId && 
+        kmlDataStorage.featureCount === featureCount) {
+      return
+    }
+    
+    // Clear old data layer
+    kmlDataStorage.clear(map)
+    kmlDataStorage.currentLayerId = layerId
+    kmlDataStorage.featureCount = featureCount
+    
+    // Get colors for this layer type
+    const colors = BOUNDARY_LAYER_COLORS[layerId] || BOUNDARY_LAYER_COLORS.states
+
+    // Create info window
+    if (!kmlDataStorage.infoWindow) {
+      kmlDataStorage.infoWindow = new google.maps.InfoWindow()
+    }
+
+    console.log(`[KML] Loading ${featureCount} features for ${layerId} using Data layer...`)
+    const startTime = performance.now()
+
+    // Create new Data layer
+    const dataLayer = new google.maps.Data({ map })
+    kmlDataStorage.dataLayer = dataLayer
+    
+    // Style the features
+    dataLayer.setStyle({
+      strokeColor: colors.stroke,
+      strokeOpacity: 0.8,
+      strokeWeight: 1,
+      fillColor: colors.stroke,
+      fillOpacity: 0.05,
+    })
+    
+    // Add GeoJSON data
+    try {
+      dataLayer.addGeoJson({
+        type: 'FeatureCollection',
+        features: data.features
+      })
+    } catch (e) {
+      console.error('[KML] Error adding GeoJSON:', e)
+      return
+    }
+    
+    // Hover effect
+    dataLayer.addListener('mouseover', (event: google.maps.Data.MouseEvent) => {
+      dataLayer.overrideStyle(event.feature, {
+        strokeWeight: 2,
+        fillOpacity: 0.15,
+      })
+    })
+    
+    dataLayer.addListener('mouseout', (event: google.maps.Data.MouseEvent) => {
+      dataLayer.revertStyle(event.feature)
+    })
+    
+    // Click to show info
+    dataLayer.addListener('click', (event: google.maps.Data.MouseEvent) => {
+      const name = event.feature.getProperty('name') || event.feature.getProperty('display_name') || 'Unknown'
+      const id = event.feature.getProperty('id') || ''
+      
+      if (kmlDataStorage.infoWindow && event.latLng) {
+        kmlDataStorage.infoWindow.setContent(`
+          <div style="padding: 8px; font-family: system-ui, sans-serif;">
+            <div style="font-weight: 600; font-size: 14px; margin-bottom: 4px;">
+              ${name}
+            </div>
+            <div style="font-size: 12px; color: #666;">
+              ${id ? `ID: ${id}` : ''}
+            </div>
+          </div>
+        `)
+        kmlDataStorage.infoWindow.setPosition(event.latLng)
+        kmlDataStorage.infoWindow.open(map)
+      }
+    })
+
+    const elapsed = ((performance.now() - startTime) / 1000).toFixed(2)
+    console.log(`[KML] Loaded ${featureCount} features in ${elapsed}s`)
+  }, [map, layerId, featureCount])
+
+  return null
+}
+
+// Search Results Layer - renders polygons for search results (no markers)
+function SearchResultsLayer({
+  results,
+  selectedResult,
+  onResultSelect,
+}: {
+  results: SearchParcel[]
+  selectedResult: SearchParcel | null
+  onResultSelect: (result: SearchParcel | null) => void
+}) {
+  const map = useMap()
+  const polygonsRef = useRef<google.maps.Polygon[]>([])
+  const infoWindowRef = useRef<google.maps.InfoWindow | null>(null)
+  const lastResultsHashRef = useRef<string>('')
+
+  useEffect(() => {
+    if (!map) return
+
+    // Create hash of parcel IDs to detect if results actually changed
+    const resultsHash = results.map(r => r.parcel_id).sort().join(',')
+    
+    // Skip update if results haven't actually changed
+    if (resultsHash === lastResultsHashRef.current && polygonsRef.current.length > 0) {
+      return
+    }
+    lastResultsHashRef.current = resultsHash
+
+    // Clear existing polygons and info window
+    polygonsRef.current.forEach(p => p.setMap(null))
+    polygonsRef.current = []
+    if (infoWindowRef.current) {
+      infoWindowRef.current.close()
+    }
+
+    if (results.length === 0) return
+
+    // Create info window for showing details
+    if (!infoWindowRef.current) {
+      infoWindowRef.current = new google.maps.InfoWindow()
+    }
+
+    // Create polygons for each search result (no markers)
+    results.forEach((result) => {
+      if (result.polygon_geojson) {
+        try {
+          // Handle both Polygon and MultiPolygon geometries
+          const geomType = result.polygon_geojson.type
+          
+          // Collect all polygon paths (each polygon may have multiple rings for holes)
+          let allPolygonPaths: google.maps.LatLngLiteral[][] = []
+          
+          if (geomType === 'Polygon') {
+            // Polygon: coordinates is array of rings [exterior, hole1, hole2, ...]
+            // All rings go into ONE Google Maps Polygon (it handles holes automatically)
+            const paths = result.polygon_geojson.coordinates.map((ring: number[][]) =>
+              ring.map((coord: number[]) => ({ lat: coord[1], lng: coord[0] }))
+            )
+            allPolygonPaths = [paths]  // Single polygon with all its rings
+          } else if (geomType === 'MultiPolygon') {
+            // MultiPolygon: array of Polygon structures
+            // Each polygon becomes a separate Google Maps Polygon
+            allPolygonPaths = result.polygon_geojson.coordinates.map((poly: number[][][]) =>
+              poly.map((ring: number[][]) =>
+                ring.map((coord: number[]) => ({ lat: coord[1], lng: coord[0] }))
+              )
+            )
+          } else {
+            // Fallback: treat as simple polygon
+            const ring = result.polygon_geojson.coordinates[0]
+            if (ring) {
+              const coords = ring.map((coord: number[]) => ({ lat: coord[1], lng: coord[0] }))
+              allPolygonPaths = [[coords]]
+            }
+          }
+          
+          // Create Google Maps Polygon for each polygon structure
+          allPolygonPaths.forEach((paths) => {
+            const polygon = new google.maps.Polygon({
+              paths: paths,  // paths can be array of arrays for polygon with holes
+              strokeColor: '#047857',  // Dark emerald outline
+              strokeOpacity: 1,
+              strokeWeight: 2,
+              fillColor: '#34d399',    // Light emerald fill
+              fillOpacity: 0.08,       // Very subtle fill
+              map,
+              zIndex: 50,
+            })
+
+            // Show info window on click with Regrid details
+            polygon.addListener('click', (e: google.maps.MapMouseEvent) => {
+            const content = `
+              <div style="font-family: system-ui; max-width: 300px; padding: 8px;">
+                <h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #1f2937;">
+                  ${result.address || 'Unknown Address'}
+                </h3>
+                <div style="font-size: 12px; color: #6b7280; line-height: 1.6;">
+                  ${result.owner ? `<div><strong>Owner:</strong> ${result.owner}</div>` : ''}
+                  ${result.area_acres ? `<div><strong>Size:</strong> ${result.area_acres.toFixed(2)} acres</div>` : ''}
+                  ${result.land_use ? `<div><strong>Land Use:</strong> ${result.land_use}</div>` : ''}
+                  ${result.zoning ? `<div><strong>Zoning:</strong> ${result.zoning}</div>` : ''}
+                  ${result.year_built ? `<div><strong>Year Built:</strong> ${result.year_built}</div>` : ''}
+                  ${result.lbcs_activity ? `<div><strong>LBCS Code:</strong> ${result.lbcs_activity}</div>` : ''}
+                  ${result.lbcs_activity_desc ? `<div><strong>LBCS Desc:</strong> ${result.lbcs_activity_desc}</div>` : ''}
+                  <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb;">
+                    <strong>Parcel ID:</strong> ${result.parcel_id}
+                  </div>
+                </div>
+              </div>
+            `
+            
+            if (infoWindowRef.current) {
+              infoWindowRef.current.setContent(content)
+              infoWindowRef.current.setPosition(e.latLng)
+              infoWindowRef.current.open(map)
+            }
+            
+            onResultSelect(result)
+          })
+
+          // Highlight on hover
+          polygon.addListener('mouseover', () => {
+            polygon.setOptions({ 
+              fillOpacity: 0.25, 
+              strokeWeight: 3,
+              strokeColor: '#059669'
+            })
+          })
+          polygon.addListener('mouseout', () => {
+            polygon.setOptions({ 
+              fillOpacity: 0.08, 
+              strokeWeight: 2,
+              strokeColor: '#047857'
+            })
+          })
+
+            polygonsRef.current.push(polygon)
+          })  // End rings.forEach
+        } catch (e) {
+          console.error('Failed to draw polygon:', e)
+        }
+      }
+    })
+
+    // Fit bounds to show all results
+    if (results.length > 0) {
+      const bounds = new google.maps.LatLngBounds()
+      results.forEach(r => {
+        if (r.polygon_geojson) {
+          r.polygon_geojson.coordinates[0].forEach((coord: number[]) => {
+            bounds.extend({ lat: coord[1], lng: coord[0] })
+          })
+        } else {
+          bounds.extend({ lat: r.lat, lng: r.lng })
+        }
+      })
+      map.fitBounds(bounds, { top: 100, right: 50, bottom: 50, left: 350 })
+    }
+
+    return () => {
+      polygonsRef.current.forEach(p => {
+        google.maps.event.clearInstanceListeners(p)
+        p.setMap(null)
+      })
+    }
+  }, [map, results, onResultSelect])
+
+  return null
+}
+
+// Polygon Drawing Controller
+function PolygonDrawingController({
+  isEnabled,
+  onPolygonComplete,
+}: {
+  isEnabled: boolean
+  onPolygonComplete: (polygon: GeoJSON.Polygon) => void
+}) {
+  const map = useMap()
+  const drawingManagerRef = useRef<google.maps.drawing.DrawingManager | null>(null)
+  const polygonCompleteListenerRef = useRef<google.maps.MapsEventListener | null>(null)
+
+  // Initialize drawing manager once
+  useEffect(() => {
+    if (!map || drawingManagerRef.current) return
+
+    const loadDrawingManager = async () => {
+      // @ts-ignore - google.maps.drawing may not be typed
+      if (!google.maps.drawing) {
+        await google.maps.importLibrary('drawing')
+      }
+
+      const drawingManager = new google.maps.drawing.DrawingManager({
+        drawingMode: null, // Start disabled
+        drawingControl: false,
+        polygonOptions: {
+          strokeColor: '#059669', // Emerald green
+          strokeOpacity: 1,
+          strokeWeight: 3,
+          fillColor: '#10b981', // Lighter green
+          fillOpacity: 0.15,
+          editable: true, // Allow editing after drawing
+          draggable: false,
+          clickable: true,
+        },
+      })
+
+      drawingManager.setMap(map)
+      drawingManagerRef.current = drawingManager
+
+      // Listen for polygon completion
+      polygonCompleteListenerRef.current = google.maps.event.addListener(
+        drawingManager,
+        'polygoncomplete',
+        (polygon: google.maps.Polygon) => {
+          // Convert to GeoJSON
+          const path = polygon.getPath()
+          const coordinates: number[][] = []
+          
+          for (let i = 0; i < path.getLength(); i++) {
+            const point = path.getAt(i)
+            coordinates.push([point.lng(), point.lat()])
+          }
+          // Close the polygon
+          if (coordinates.length > 0 && coordinates[0][0] !== coordinates[coordinates.length - 1][0] || 
+              coordinates[0][1] !== coordinates[coordinates.length - 1][1]) {
+            coordinates.push([coordinates[0][0], coordinates[0][1]])
+          }
+
+          const geoJson: GeoJSON.Polygon = {
+            type: 'Polygon',
+            coordinates: [coordinates],
+          }
+
+          // Remove the DrawingManager's polygon - we use DrawnPolygonLayer instead
+          polygon.setMap(null)
+          
+          // Disable drawing mode
+          drawingManager.setDrawingMode(null)
+
+          onPolygonComplete(geoJson)
+        }
+      )
+    }
+
+    loadDrawingManager()
+
+    return () => {
+      // Clean up listener
+      if (polygonCompleteListenerRef.current) {
+        google.maps.event.removeListener(polygonCompleteListenerRef.current)
+        polygonCompleteListenerRef.current = null
+      }
+      // Clean up drawing manager
+      if (drawingManagerRef.current) {
+        drawingManagerRef.current.setMap(null)
+        drawingManagerRef.current = null
+      }
+    }
+  }, [map, onPolygonComplete])
+
+  // Toggle drawing mode based on isEnabled prop
+  useEffect(() => {
+    if (!drawingManagerRef.current) return
+
+    if (isEnabled) {
+      // Enable polygon drawing mode
+      drawingManagerRef.current.setDrawingMode(google.maps.drawing.OverlayType.POLYGON)
+    } else {
+      // Disable drawing mode (but keep manager alive)
+      drawingManagerRef.current.setDrawingMode(null)
+    }
+  }, [isEnabled])
+
+  return null
+}
+
+// Search Result Popup
+function SearchResultPopup({
+  parcel,
+  onClose,
+}: {
+  parcel: SearchParcel
+  onClose: () => void
+}) {
+  const formatAcres = (acres: number | null) => {
+    if (!acres) return null
+    return acres < 1 ? `${(acres * 43560).toFixed(0)} sqft` : `${acres.toFixed(2)} acres`
+  }
+
+  return (
+    <div className="w-64 bg-card border border-border rounded-lg shadow-xl overflow-hidden">
+      {/* Close Button */}
+      <button
+        onClick={onClose}
+        className="absolute top-1.5 right-1.5 z-10 h-6 w-6 flex items-center justify-center rounded-md bg-black/40 backdrop-blur-sm hover:bg-black/60 transition-colors"
+      >
+        <X className="h-3.5 w-3.5 text-white" />
+      </button>
+
+      {/* Header */}
+      <div className="bg-emerald-500 px-3 py-2">
+        <div className="flex items-center gap-2 text-white">
+          <MapPin className="h-4 w-4" />
+          <span className="text-sm font-medium">Search Result</span>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="p-3 space-y-2">
+        {/* Address */}
+        <div>
+          <p className="text-sm font-medium text-foreground line-clamp-2">
+            {parcel.address || 'Unknown Address'}
+          </p>
+          {parcel.brand_name && (
+            <p className="text-xs text-muted-foreground">{parcel.brand_name}</p>
+          )}
+        </div>
+
+        {/* Details */}
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          {parcel.owner && (
+            <div>
+              <span className="text-muted-foreground">Owner:</span>
+              <p className="font-medium text-foreground truncate">{parcel.owner}</p>
+            </div>
+          )}
+          {parcel.area_acres && (
+            <div>
+              <span className="text-muted-foreground">Size:</span>
+              <p className="font-medium text-foreground">{formatAcres(parcel.area_acres)}</p>
+            </div>
+          )}
+          {parcel.land_use && (
+            <div>
+              <span className="text-muted-foreground">Land Use:</span>
+              <p className="font-medium text-foreground truncate">{parcel.land_use}</p>
+            </div>
+          )}
+          {parcel.zoning && (
+            <div>
+              <span className="text-muted-foreground">Zoning:</span>
+              <p className="font-medium text-foreground">{parcel.zoning}</p>
+            </div>
+          )}
+        </div>
+
+        {/* Parcel ID */}
+        <div className="text-[10px] text-muted-foreground pt-1 border-t border-border">
+          ID: {parcel.parcel_id}
+        </div>
       </div>
     </div>
   )

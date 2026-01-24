@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     REGRID_API_KEY: Optional[str] = None
     REGRID_API_URL: str = "https://app.regrid.com/api/v2"
     
+    # Regrid Tileserver API (for free parcel geometry tiles)
+    # API docs: https://support.regrid.com/api/using-the-tileserver-api
+    REGRID_TILESERVER_TOKEN: Optional[str] = None
+    REGRID_TILESERVER_URL: str = "https://tiles.regrid.com"
+    
     # Computer Vision (Roboflow hosted API)
     # API docs: https://docs.roboflow.com/deploy/serverless/object-detection
     ROBOFLOW_API_KEY: Optional[str] = None

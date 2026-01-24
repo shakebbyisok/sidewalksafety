@@ -1,0 +1,8 @@
+# Place boundary KML/GeoJSON files here:
+# - states.kml or states.geojson
+# - counties.kml or counties.geojson  
+# - zipcodes.kml or zipcodes.geojson
+# - metros.kml or metros.geojson
+#
+# These files will be loaded by the boundary service.
+# Large files (>50MB) should be added to .gitignore and uploaded separately.

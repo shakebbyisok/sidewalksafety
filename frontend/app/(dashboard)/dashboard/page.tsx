@@ -1,11 +1,18 @@
 'use client'
 
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react'
+import { useMutation } from '@tanstack/react-query'
 import { useDeals, useDealsForMap, useScrapeDeals, MapBounds } from '@/lib/queries/use-deals'
 import { InteractiveMap } from '@/components/map/interactive-map'
 import { DiscoveryCard } from '@/components/map/discovery-card'
 import { PropertyPreviewCard } from '@/components/map/property-preview-card'
+import { DiscoveryPanel } from '@/components/features/discovery/DiscoveryPanel'
+import { BoundaryLayerSelector } from '@/components/features/boundaries'
 import { useDiscoveryStream } from '@/lib/hooks/use-discovery-stream'
+import { SearchParcel, ViewportBounds } from '@/lib/api/search'
+import { BoundaryLayerResponse, boundariesApi } from '@/lib/api/boundaries'
+import { discoveryApi, DiscoveryParcel } from '@/lib/api/discovery'
+import { ArcGISParcel } from '@/lib/api/arcgis-parcels'
 
 type ClickMode = 'property' | 'discovery'
 import { DealMapResponse, PropertyCategory } from '@/types'
@@ -45,6 +52,150 @@ export default function DashboardPage() {
   
   const [mapBounds, setMapBounds] = useState<MapBounds | undefined>(undefined)
   const boundsTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+
+  // Search state
+  const [searchViewport, setSearchViewport] = useState<ViewportBounds | null>(null)
+  const [searchResults, setSearchResults] = useState<SearchParcel[]>([])
+  const [isDrawingPolygon, setIsDrawingPolygon] = useState(false)
+  const [drawnPolygon, setDrawnPolygon] = useState<GeoJSON.Polygon | null>(null)
+  const [boundaryLayerData, setBoundaryLayerData] = useState<{ data: BoundaryLayerResponse | null; layerId: string | null }>({ data: null, layerId: null })
+  
+  // Click-to-select state for ZIP/County/Urban search
+  const [mapClickMode, setMapClickMode] = useState<'zip' | 'county' | 'pin' | 'urban' | null>('urban')  // Start in urban mode
+  const [searchClickedPoint, setSearchClickedPoint] = useState<{ lat: number; lng: number } | null>(null)
+  const [selectedBoundary, setSelectedBoundary] = useState<{
+    boundary: GeoJSON.Polygon | GeoJSON.MultiPolygon | null
+    name: string
+    type: 'zip' | 'county' | null
+  }>({ boundary: null, name: '', type: null })
+  const [pinParcelPolygon, setPinParcelPolygon] = useState<GeoJSON.Polygon | GeoJSON.MultiPolygon | null>(null)
+  
+  // Urban area selection state
+  const [showUrbanOverlay, setShowUrbanOverlay] = useState(true)  // Start with urban overlay
+  const [selectedUrbanArea, setSelectedUrbanArea] = useState<{
+    id: string
+    name: string
+    geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon
+  } | null>(null)
+  
+  // Discovery state (new ArcGIS-based flow)
+  const [discoveryParcels, setDiscoveryParcels] = useState<ArcGISParcel[]>([])
+  const [selectedDiscoveryParcels, setSelectedDiscoveryParcels] = useState<ArcGISParcel[]>([])
+  const [discoveryBoundary, setDiscoveryBoundary] = useState<{
+    id: string
+    name: string
+    geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon
+    type: 'zip' | 'county'
+  } | null>(null)
+  const [isLoadingDiscoveryBoundary, setIsLoadingDiscoveryBoundary] = useState(false)
+
+  // Clear clicked point when mode changes
+  const handleMapClickMode = useCallback((mode: 'zip' | 'county' | 'pin' | 'urban' | null) => {
+    setMapClickMode(mode)
+    setSearchClickedPoint(null)
+    if (!mode || mode === 'pin') {
+      setSelectedBoundary({ boundary: null, name: '', type: null })
+    }
+  }, [])
+  
+  // Discovery parcel query mutation
+  const discoveryMutation = useMutation({
+    mutationFn: discoveryApi.queryParcels,
+    onSuccess: (data) => {
+      if (data.success) {
+        // Convert to ArcGISParcel format
+        const parcels: ArcGISParcel[] = data.parcels.map(p => ({
+          id: p.id,
+          address: p.address,
+          acreage: p.acreage,
+          apn: p.apn,
+          regridId: p.regrid_id,
+          geometry: p.geometry,
+          centroid: p.centroid,
+          selected: false,
+        }))
+        setDiscoveryParcels(parcels)
+        setSelectedDiscoveryParcels([])
+      } else {
+        console.error('Discovery query failed:', data.error)
+        alert(data.error || 'Failed to load parcels')
+      }
+    },
+    onError: (error: any) => {
+      console.error('Discovery query error:', error)
+      alert('Failed to load parcels. Please try again.')
+    },
+  })
+  
+  // Handle boundary lookup for discovery (ZIP/County)
+  const handleDiscoveryBoundaryLookup = useCallback(async (lat: number, lng: number, layer: 'zips' | 'counties') => {
+    setIsLoadingDiscoveryBoundary(true)
+    try {
+      const result = await boundariesApi.getBoundaryAtPoint(lat, lng, layer)
+      if (result.found && result.boundary) {
+        setDiscoveryBoundary({
+          id: result.boundary.id,
+          name: result.boundary.name,
+          geometry: result.boundary.geometry,
+          type: layer === 'zips' ? 'zip' : 'county',
+        })
+        // Also set selectedBoundary for map display
+        setSelectedBoundary({
+          boundary: result.boundary.geometry,
+          name: result.boundary.name,
+          type: layer === 'zips' ? 'zip' : 'county',
+        })
+      } else {
+        alert(`No ${layer === 'zips' ? 'ZIP code' : 'county'} found at this location`)
+      }
+    } catch (error) {
+      console.error('Boundary lookup error:', error)
+      alert('Failed to find boundary. Please try again.')
+    } finally {
+      setIsLoadingDiscoveryBoundary(false)
+    }
+  }, [])
+  
+  // Handle request for parcels (triggered when user clicks "Find Parcels")
+  const handleRequestParcels = useCallback((geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon) => {
+    // The size filter will be passed from the DiscoveryPanel
+    // For now, just query with no filter (will be passed via state)
+    discoveryMutation.mutate({
+      geometry,
+      limit: 500,
+    })
+  }, [discoveryMutation])
+  
+  // Handle parcel selection
+  const handleParcelSelect = useCallback((parcel: ArcGISParcel, selected: boolean) => {
+    if (selected) {
+      setSelectedDiscoveryParcels(prev => [...prev, parcel])
+    } else {
+      setSelectedDiscoveryParcels(prev => prev.filter(p => p.id !== parcel.id))
+    }
+  }, [])
+  
+  // Handle select/deselect all
+  const handleSelectAllParcels = useCallback(() => {
+    setSelectedDiscoveryParcels([...discoveryParcels])
+  }, [discoveryParcels])
+  
+  const handleDeselectAllParcels = useCallback(() => {
+    setSelectedDiscoveryParcels([])
+  }, [])
+  
+  // Handle clear parcels
+  const handleClearParcels = useCallback(() => {
+    setDiscoveryParcels([])
+    setSelectedDiscoveryParcels([])
+  }, [])
+  
+  // Handle process selected parcels
+  const handleProcessParcels = useCallback(async (parcels: ArcGISParcel[]) => {
+    console.log('Processing parcels:', parcels)
+    // TODO: Implement LLM enrichment for selected parcels
+    alert(`Processing ${parcels.length} parcels for enrichment. This feature is coming soon!`)
+  }, [])
 
   const hasMapLoadedOnce = useRef(false)
   const scrapeDeals = useScrapeDeals()
@@ -86,23 +237,100 @@ export default function DashboardPage() {
   const handleViewDetails = (dealId: string) => router.push(`/parking-lots/${dealId}`)
   
   const handleMapClick = useCallback((lat: number, lng: number) => {
+    // If in ZIP/County/Pin click mode, pass to search panel
+    if (mapClickMode === 'zip' || mapClickMode === 'county' || mapClickMode === 'pin') {
+      setSearchClickedPoint({ lat, lng })
+      return
+    }
+    
+    // Normal property click (opens PropertyPreviewCard)
     setSelectedDeal(null)
     setClickedLocation({ lat, lng })
     setPreviewPolygon(null)
     setClickMode('property')
-  }, [])
+  }, [mapClickMode])
 
   const handlePolygonReady = useCallback((polygon: any) => {
     setPreviewPolygon(polygon)
   }, [])
 
   const handleBoundsChange = useCallback((bounds: { minLat: number; maxLat: number; minLng: number; maxLng: number }) => {
+    // Update search viewport immediately
+    setSearchViewport(bounds)
+    
     if (boundsTimeoutRef.current) {
       clearTimeout(boundsTimeoutRef.current)
     }
     boundsTimeoutRef.current = setTimeout(() => {
       setMapBounds(bounds)
     }, BOUNDS_DEBOUNCE_MS)
+  }, [])
+
+  // Search handlers
+  const handleSearchResults = useCallback((parcels: SearchParcel[]) => {
+    setSearchResults(parcels)
+    setIsDrawingPolygon(false)
+  }, [])
+  
+  // Convert discovery parcels to SearchParcel format for map display
+  const discoverySearchResults: SearchParcel[] = useMemo(() => {
+    return discoveryParcels.map(p => ({
+      parcel_id: p.id,
+      address: p.address,
+      lat: p.centroid.lat,
+      lng: p.centroid.lng,
+      area_acres: p.acreage,
+      area_sqft: p.acreage * 43560, // Convert acres to sqft
+      owner: null,
+      land_use: null,
+      zoning: null,
+      year_built: null,
+      lbcs_activity: null,
+      lbcs_activity_desc: null,
+      brand_name: null,
+      place_id: null,
+      polygon_geojson: p.geometry as GeoJSON.Polygon,
+    }))
+  }, [discoveryParcels])
+  
+  // Combined search results for map display
+  const mapSearchResults = useMemo(() => {
+    // Prefer discovery results if available, otherwise use old search results
+    return discoverySearchResults.length > 0 ? discoverySearchResults : searchResults
+  }, [discoverySearchResults, searchResults])
+
+  const handleDrawPolygon = useCallback(() => {
+    setIsDrawingPolygon(true)
+    setDrawnPolygon(null)
+  }, [])
+
+  const handleCancelDrawing = useCallback(() => {
+    setIsDrawingPolygon(false)
+    setDrawnPolygon(null)
+  }, [])
+
+  const handleClearSearch = useCallback(() => {
+    setSearchResults([])
+    setDrawnPolygon(null)
+    setIsDrawingPolygon(false)
+    setMapClickMode(null)
+    setSearchClickedPoint(null)
+    setSelectedBoundary({ boundary: null, name: '', type: null })
+    setPinParcelPolygon(null)
+  }, [])
+
+  const handleBoundaryLayerData = useCallback((data: BoundaryLayerResponse | null, layerId: string | null) => {
+    // Only update if actually changed to prevent unnecessary re-renders
+    setBoundaryLayerData(prev => {
+      if (prev.layerId === layerId && prev.data === data) {
+        return prev // Same reference, no update
+      }
+      if (prev.layerId === layerId && 
+          prev.data?.features?.length === data?.features?.length) {
+        return prev // Same layer, same count, skip update
+      }
+      return { data, layerId }
+    })
   }, [])
 
   useEffect(() => {
@@ -112,6 +340,15 @@ export default function DashboardPage() {
       }
     }
   }, [])
+  
+  // Handle boundary lookup when user clicks map in ZIP/County mode
+  useEffect(() => {
+    if (!searchClickedPoint) return
+    if (mapClickMode !== 'zip' && mapClickMode !== 'county') return
+    
+    const layer = mapClickMode === 'zip' ? 'zips' : 'counties'
+    handleDiscoveryBoundaryLookup(searchClickedPoint.lat, searchClickedPoint.lng, layer)
+  }, [searchClickedPoint, mapClickMode, handleDiscoveryBoundaryLookup])
 
   const handleDiscover = (params: {
     type: 'zip' | 'county'
@@ -281,12 +518,60 @@ export default function DashboardPage() {
             onMapClick={handleMapClick}
             clickedLocation={clickedLocation}
             previewPolygon={previewPolygon}
+            searchResults={mapSearchResults}
+            isDrawingPolygon={isDrawingPolygon}
+            onPolygonDrawn={(polygon) => {
+              setDrawnPolygon(polygon)
+              setIsDrawingPolygon(false)
+            }}
+            countyBoundary={{
+              boundary: selectedBoundary.boundary,
+              name: selectedBoundary.name
+            }}
+            boundaryLayer={boundaryLayerData}
+            mapClickMode={mapClickMode}
+            pinParcelPolygon={pinParcelPolygon}
+            drawnPolygon={drawnPolygon}
+            showUrbanOverlay={showUrbanOverlay}
+            selectedUrbanArea={selectedUrbanArea}
+            onUrbanAreaSelect={setSelectedUrbanArea}
           />
         )}
 
+        {/* Discovery Panel */}
+        <DiscoveryPanel
+          onDrawPolygon={handleDrawPolygon}
+          onCancelDrawing={handleCancelDrawing}
+          onClearDrawnPolygon={() => setDrawnPolygon(null)}
+          onMapClickMode={handleMapClickMode}
+          onBoundarySelect={(boundary, name, type) => {
+            setSelectedBoundary({ boundary, name, type })
+            if (!boundary) {
+              setDiscoveryBoundary(null)
+            }
+          }}
+          isDrawing={isDrawingPolygon}
+          drawnPolygon={drawnPolygon}
+          clickedPoint={searchClickedPoint}
+          selectedBoundary={discoveryBoundary}
+          isLoadingBoundary={isLoadingDiscoveryBoundary}
+          onShowUrbanOverlay={setShowUrbanOverlay}
+          onUrbanAreaSelect={setSelectedUrbanArea}
+          selectedUrbanArea={selectedUrbanArea}
+          loadedParcels={discoveryParcels}
+          isLoadingParcels={discoveryMutation.isPending}
+          onRequestParcels={handleRequestParcels}
+          selectedParcels={selectedDiscoveryParcels}
+          onParcelSelect={handleParcelSelect}
+          onSelectAll={handleSelectAllParcels}
+          onDeselectAll={handleDeselectAllParcels}
+          onProcessSelected={handleProcessParcels}
+          onClearParcels={handleClearParcels}
+        />
+
         {/* Property Preview or Discovery Card */}
         {clickedLocation && (
-          <div className="absolute top-4 right-4 z-30">
+          <div className="absolute bottom-4 left-4 z-30">
             {clickMode === 'property' ? (
               <PropertyPreviewCard
                 lat={clickedLocation.lat}
@@ -329,6 +614,12 @@ export default function DashboardPage() {
             <LegendItem color="bg-stone-400" label="Pending" />
           </div>
         </div>
+
+        {/* Boundary Layer Selector */}
+        <BoundaryLayerSelector
+          viewport={searchViewport}
+          onLayerData={handleBoundaryLayerData}
+        />
       </div>
     </div>
   )
